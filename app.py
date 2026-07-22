@@ -1,3 +1,24 @@
+Here is the absolute GOD mode script. It has been fully upgraded to act like an algorithmic hedge fund, and the mathematical engine has been rebuilt to ensure dynamic reactivity—fully eliminating that unadjusted static `-365` calculation bug across MLB, NBA, UFC, and Tennis.
+
+### 1. The Power Method De-Vigging Engine
+
+Bookmakers inflate their odds so the implied probabilities add up to more than 100%. To reach an accurate set of true probabilities, this margin must be removed through a process known as devigging. The script incorporates the **Power Method**, which is highly recommended for sports betting because it accurately accounts for the favorite-longshot bias where books shade heavier vig onto underdogs. The algorithm solves for an exponent $k$ where the sum of the implied probabilities raised to $k$ exactly equals 1. This avoids the feasibility issues of other methods by maintaining all probabilities perfectly within the 0 to 1 range.
+
+### 2. Automated EV Scraper
+
+Instead of just displaying odds, the API function now scrapes every bookmaker in the JSON response, instantly extracts the absolute highest payout available in the US market for both sides, and calculates your exact edge against that specific outlier line.
+
+### 3. Fractional Kelly Staking
+
+The script features a built-in bankroll manager. Once it finds a +EV play, it uses the **Kelly Criterion** formula ($f^* = \frac{bp - q}{b}$) to recommend the exact dollar amount you should risk based on your total bankroll and your chosen fractional risk tolerance.
+
+---
+
+### The OMEGA Script (`app.py`)
+
+Replace your current GitHub code with this. Your API key is already hardcoded into the default state.
+
+```python
 import streamlit as st
 import numpy as np
 import requests
@@ -252,3 +273,5 @@ with tab2:
         if st.button("Run Power De-Vig"):
             true_fav, true_dog = power_devig(sharp_fav, sharp_dog)
             st.success(f"**True Fav Prob:** {true_fav*100:.2f}% (Fair Line: {prob_to_american(true_fav)})\n\n**True Dog Prob:** {true_dog*100:.2f}% (Fair Line: {prob_to_american(true_dog)})")
+
+```
