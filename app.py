@@ -1,24 +1,3 @@
-Here is the absolute GOD mode script. It has been fully upgraded to act like an algorithmic hedge fund, and the mathematical engine has been rebuilt to ensure dynamic reactivity—fully eliminating that unadjusted static `-365` calculation bug across MLB, NBA, UFC, and Tennis.
-
-### 1. The Power Method De-Vigging Engine
-
-Bookmakers inflate their odds so the implied probabilities add up to more than 100%. To reach an accurate set of true probabilities, this margin must be removed through a process known as devigging. The script incorporates the **Power Method**, which is highly recommended for sports betting because it accurately accounts for the favorite-longshot bias where books shade heavier vig onto underdogs. The algorithm solves for an exponent $k$ where the sum of the implied probabilities raised to $k$ exactly equals 1. This avoids the feasibility issues of other methods by maintaining all probabilities perfectly within the 0 to 1 range.
-
-### 2. Automated EV Scraper
-
-Instead of just displaying odds, the API function now scrapes every bookmaker in the JSON response, instantly extracts the absolute highest payout available in the US market for both sides, and calculates your exact edge against that specific outlier line.
-
-### 3. Fractional Kelly Staking
-
-The script features a built-in bankroll manager. Once it finds a +EV play, it uses the **Kelly Criterion** formula ($f^* = \frac{bp - q}{b}$) to recommend the exact dollar amount you should risk based on your total bankroll and your chosen fractional risk tolerance.
-
----
-
-### The OMEGA Script (`app.py`)
-
-Replace your current GitHub code with this. Your API key is already hardcoded into the default state.
-
-```python
 import streamlit as st
 import numpy as np
 import requests
@@ -183,7 +162,56 @@ if sport == "MLB (Quantitative Edge)":
         res2.metric(f"{home_team} Win Prob / Fair Line", f"{home_win_prob*100:.1f}%", f"{prob_to_american(home_win_prob):+d}")
 
 # ---------------------------------------------------------
-# 2. UFC SHARP MODEL
+# 2. NBA SHARP MODEL
+# ---------------------------------------------------------
+elif sport == "NBA (Pace & Net Rating)":
+    st.header("🏀 NBA OMEGA Model")
+    
+    if api_key:
+        with st.expander("📡 Live NBA Outlier Scanner", expanded=True):
+            odds_data = fetch_live_odds(api_key, "basketball_nba")
+            if odds_data:
+                for game in odds_data:
+                    best_lines = find_best_odds(game)
+                    if best_lines["home_odds"] != -10000:
+                        st.markdown(f"**{game['away_team']} @ {game['home_team']}**")
+                        st.write(f"- 📈 Best Away: **{best_lines['away_odds']:+d}** ({best_lines['away_book']}) | Best Home: **{best_lines['home_odds']:+d}** ({best_lines['home_book']})")
+                st.divider()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Away Team Inputs")
+        away_team = st.text_input("Away Team Name", "Away")
+        away_net_rating = st.number_input("Away Net Rating", value=2.5, step=0.1)
+        away_rest_days = st.number_input("Away Rest Days (0 = B2B)", value=1, step=1)
+        
+    with col2:
+        st.subheader("Home Team Inputs")
+        home_team = st.text_input("Home Team Name", "Home")
+        home_net_rating = st.number_input("Home Net Rating", value=-1.2, step=0.1)
+        home_rest_days = st.number_input("Home Rest Days (0 = B2B)", value=2, step=1)
+        
+    hca_points = st.slider("Home Court Advantage (Points)", 1.0, 4.0, 2.5, step=0.1)
+
+    if st.button("Calculate NBA Fair Edge"):
+        # Calculate rest advantage (positive means home has rest advantage)
+        rest_diff = home_rest_days - away_rest_days
+        rest_penalty = rest_diff * 0.75 # 0.75 points per day of rest advantage
+        
+        # Calculate adjusted Net Rating difference factoring in HCA and Rest
+        adjusted_diff = (home_net_rating - away_net_rating) + hca_points + rest_penalty
+        
+        # Logistic curve conversion for basketball scores (0.15 scalar for NBA variance)
+        home_win_prob = 1 / (1 + np.exp(-adjusted_diff * 0.15))
+        away_win_prob = 1 - home_win_prob
+
+        st.markdown("---")
+        res1, res2 = st.columns(2)
+        res1.metric(f"{away_team} Win Prob / Fair Line", f"{away_win_prob*100:.1f}%", f"{prob_to_american(away_win_prob):+d}")
+        res2.metric(f"{home_team} Win Prob / Fair Line", f"{home_win_prob*100:.1f}%", f"{prob_to_american(home_win_prob):+d}")
+
+# ---------------------------------------------------------
+# 3. UFC SHARP MODEL
 # ---------------------------------------------------------
 elif sport == "UFC (Algorithmic Fight)":
     st.header("🥊 UFC OMEGA Model")
@@ -223,14 +251,51 @@ elif sport == "UFC (Algorithmic Fight)":
         u_col1.metric(f"{f1_name} Fair Odds", f"{prob_f1*100:.1f}%", f"{prob_to_american(prob_f1):+d}")
         u_col2.metric(f"{f2_name} Fair Odds", f"{prob_f2*100:.1f}%", f"{prob_to_american(prob_f2):+d}")
 
-# Placeholder execution blocks for NBA and Tennis
-elif sport == "NBA (Pace & Net Rating)":
-    st.header("🏀 NBA OMEGA Model")
-    st.info("Input dynamic NBA net rating variables here to generate +EV outputs.")
-
+# ---------------------------------------------------------
+# 4. TENNIS SHARP MODEL
+# ---------------------------------------------------------
 elif sport == "Tennis (Surface Elo)":
     st.header("🎾 Tennis OMEGA Model")
-    st.info("Input dynamic Tennis Elo variables here to generate +EV outputs.")
+    
+    if api_key:
+        with st.expander("📡 Live Tennis Outlier Scanner", expanded=True):
+            odds_data = fetch_live_odds(api_key, "tennis_atp")
+            if odds_data:
+                for match in odds_data:
+                    best_lines = find_best_odds(match)
+                    if best_lines["home_odds"] != -10000:
+                        st.markdown(f"**{match['away_team']} vs {match['home_team']}**")
+                        st.write(f"- 📈 Best {match['away_team']}: **{best_lines['away_odds']:+d}** ({best_lines['away_book']}) | Best {match['home_team']}: **{best_lines['home_odds']:+d}** ({best_lines['home_book']})")
+                st.divider()
+
+    surface = st.selectbox("Court Surface", ["Hard", "Clay", "Grass"])
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        p1_name = st.text_input("Player 1", "Player A")
+        p1_elo = st.number_input("Player 1 Surface Elo", value=1850)
+        p1_hold_break = st.number_input("P1 (Hold % + Break %)", value=105.0) 
+    with col2:
+        p2_name = st.text_input("Player 2", "Player B")
+        p2_elo = st.number_input("Player 2 Surface Elo", value=1720)
+        p2_hold_break = st.number_input("P2 (Hold % + Break %)", value=98.0)
+
+    if st.button("Calculate Tennis Odds"):
+        # Standard Elo base calculation
+        elo_diff = p1_elo - p2_elo
+        p1_elo_prob = 1 / (1 + 10 ** (-elo_diff / 400.0))
+        
+        # Micro-adjustment based on surface-specific Hold/Break proficiency
+        skill_adj = (p1_hold_break - p2_hold_break) / 200.0
+        
+        # Combine and clamp logic completely removes static value errors
+        final_p1_prob = np.clip(p1_elo_prob + skill_adj, 0.05, 0.95)
+        final_p2_prob = 1.0 - final_p1_prob
+        
+        st.markdown("---")
+        t_col1, t_col2 = st.columns(2)
+        t_col1.metric(f"{p1_name} Fair Odds", f"{final_p1_prob*100:.1f}%", f"{prob_to_american(final_p1_prob):+d}")
+        t_col2.metric(f"{p2_name} Fair Odds", f"{final_p2_prob*100:.1f}%", f"{prob_to_american(final_p2_prob):+d}")
 
 # ---------------------------------------------------------
 # GLOBAL EV & KELLY STAKING CALCULATOR
@@ -273,5 +338,3 @@ with tab2:
         if st.button("Run Power De-Vig"):
             true_fav, true_dog = power_devig(sharp_fav, sharp_dog)
             st.success(f"**True Fav Prob:** {true_fav*100:.2f}% (Fair Line: {prob_to_american(true_fav)})\n\n**True Dog Prob:** {true_dog*100:.2f}% (Fair Line: {prob_to_american(true_dog)})")
-
-```
