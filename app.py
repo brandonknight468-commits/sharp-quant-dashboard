@@ -1,173 +1,254 @@
 import streamlit as st
+import numpy as np
+import requests
 
-def prob_to_american(prob):
-    """Converts win probability (0 to 1) into standard American odds."""
-    if prob >= 0.5:
-        return int(-100 * (prob / (1 - prob)))
+st.set_page_config(page_title="OMEGA Sharp Analytics Engine", layout="wide")
+
+# Pre-loaded default Odds API Key
+DEFAULT_API_KEY = "c17801d71f4342ca1dd66536e9b62634"
+
+st.title("⚡ OMEGA Multi-Sport EV, Devig & Staking Engine")
+st.markdown("---")
+
+# ---------------------------------------------------------
+# CORE MATH, DEVIGGING & STAKING FUNCTIONS
+# ---------------------------------------------------------
+def prob_to_american(p):
+    # Dynamic clamping completely prevents unadjusted static values (e.g., -365 bugs)
+    p = np.clip(p, 0.01, 0.99)
+    if p >= 0.5:
+        return int(round(-100 * (p / (1 - p))))
     else:
-        return int(100 * ((1 - prob) / prob))
+        return int(round(100 * ((1 - p) / p)))
 
-# Dashboard Config
-st.set_page_config(page_title="Sharp Quant Dashboard", layout="wide")
-st.title("⚡ Sharp Multi-Sport Predictive Dashboard")
+def american_to_decimal(odds):
+    if odds > 0:
+        return (odds / 100.0) + 1.0
+    elif odds < 0:
+        return (100.0 / abs(odds)) + 1.0
+    return 1.0
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "⚾ MLB (F5 Model)", 
-    "🥊 UFC (Style Analyzer)", 
-    "🏀 NBA (Injury Adjuster)", 
-    "🎾 Tennis (Live Validator)"
+def power_devig(odds1_amer, odds2_amer):
+    """
+    Strips bookmaker vig using the Power Method.
+    Accounts for favorite-longshot bias and keeps probabilities within 0-1.
+    """
+    p1 = 1.0 / american_to_decimal(odds1_amer)
+    p2 = 1.0 / american_to_decimal(odds2_amer)
+    
+    # Bisection search to find exponent k where p1^k + p2^k = 1
+    low, high = 0.001, 10.0
+    for _ in range(50):
+        mid = (low + high) / 2.0
+        if (p1**mid + p2**mid) > 1.0:
+            low = mid
+        else:
+            high = mid
+    k = (low + high) / 2.0
+    return p1**k, p2**k
+
+def calculate_ev(win_prob, decimal_odds):
+    return (win_prob * (decimal_odds - 1)) - (1 - win_prob)
+
+def kelly_criterion(win_prob, decimal_odds, fraction, bankroll):
+    b = decimal_odds - 1.0
+    q = 1.0 - win_prob
+    if b <= 0:
+        return 0.0
+    k_star = (b * win_prob - q) / b
+    return max(0.0, k_star * fraction * bankroll)
+
+@st.cache_data(ttl=120)
+def fetch_live_odds(api_key, sport_key):
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/"
+    params = {
+        "apiKey": api_key,
+        "regions": "us",
+        "markets": "h2h", 
+        "oddsFormat": "american"
+    }
+    try:
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except Exception:
+        return None
+
+def find_best_odds(game_data):
+    best_home = -10000
+    best_away = -10000
+    home_book = "N/A"
+    away_book = "N/A"
+    
+    for book in game_data.get("bookmakers", []):
+        for market in book.get("markets", []):
+            if market["key"] == "h2h":
+                for outcome in market["outcomes"]:
+                    price = outcome["price"]
+                    if outcome["name"] == game_data["home_team"]:
+                        if price > best_home:
+                            best_home = price
+                            home_book = book["title"]
+                    else:
+                        if price > best_away:
+                            best_away = price
+                            away_book = book["title"]
+                            
+    return {"home_odds": best_home, "home_book": home_book, 
+            "away_odds": best_away, "away_book": away_book}
+
+# ---------------------------------------------------------
+# SIDEBAR CONFIGURATION
+# ---------------------------------------------------------
+st.sidebar.header("⚙️ System Configuration")
+api_key = st.sidebar.text_input("Odds API Key", value=DEFAULT_API_KEY, type="password")
+
+st.sidebar.markdown("---")
+st.sidebar.header("💰 Bankroll Management")
+total_bankroll = st.sidebar.number_input("Total Bankroll ($)", value=1000.0, step=100.0)
+kelly_fraction = st.sidebar.selectbox("Kelly Multiplier", [0.10, 0.25, 0.50, 1.0], index=1)
+
+sport = st.sidebar.selectbox("Select Analytics Model", [
+    "MLB (Quantitative Edge)", 
+    "NBA (Pace & Net Rating)", 
+    "UFC (Algorithmic Fight)", 
+    "Tennis (Surface Elo)"
 ])
 
-# =========================================================
-# TAB 1: MLB FIRST 5 INNINGS (F5) MODEL (FULLY CORRECTED)
-# =========================================================
-with tab1:
-    st.header("⚾ MLB First 5 Innings (F5) Model")
-    st.caption("Calibrated for 5-inning variance using Pythagenpat exponent scaling (γ = 1.20) and weighted wRC+ regression.")
+# ---------------------------------------------------------
+# 1. MLB SHARP MODEL
+# ---------------------------------------------------------
+if sport == "MLB (Quantitative Edge)":
+    st.header("⚾ MLB OMEGA Model")
+    
+    if api_key:
+        with st.expander("📡 Live MLB Outlier Scanner", expanded=True):
+            odds_data = fetch_live_odds(api_key, "baseball_mlb")
+            if odds_data:
+                for game in odds_data:
+                    best_lines = find_best_odds(game)
+                    if best_lines["home_odds"] != -10000:
+                        st.markdown(f"**{game['away_team']} @ {game['home_team']}**")
+                        st.write(f"- 📈 Best Away: **{best_lines['away_odds']:+d}** ({best_lines['away_book']}) | Best Home: **{best_lines['home_odds']:+d}** ({best_lines['home_book']})")
+                st.divider()
+            else:
+                st.error("Failed to fetch odds. Verify your API Key or endpoint limits.")
     
     col1, col2 = st.columns(2)
-    
     with col1:
-        st.subheader("Team A (Away)")
-        team_a_name = st.text_input("Team A Name", value="Dodgers")
-        a_wrc_season = st.number_input("Team A Season wRC+", value=115.0, step=1.0)
-        a_wrc_14d = st.number_input("Team A 14-Day wRC+", value=100.0, step=1.0)
-        a_sp_xfip = st.number_input("Team A Pitcher xFIP", value=3.31, step=0.01)
+        st.subheader("Away Team Inputs")
+        away_team = st.text_input("Away Team Name", "Away")
+        away_pitcher_siera = st.number_input("Away Pitcher SIERA / xFIP", value=3.80, step=0.05)
+        away_wrc = st.number_input("Away 14-Day wRC+", value=102.0, step=1.0)
         
     with col2:
-        st.subheader("Team B (Home)")
-        team_b_name = st.text_input("Team B Name", value="Yankees")
-        b_wrc_season = st.number_input("Team B Season wRC+", value=110.0, step=1.0)
-        b_wrc_14d = st.number_input("Team B 14-Day wRC+", value=101.0, step=1.0)
-        b_sp_xfip = st.number_input("Team B Pitcher xFIP", value=5.26, step=0.01)
+        st.subheader("Home Team Inputs")
+        home_team = st.text_input("Home Team Name", "Home")
+        home_pitcher_siera = st.number_input("Home Pitcher SIERA / xFIP", value=4.50, step=0.05)
+        home_wrc = st.number_input("Home 14-Day wRC+", value=98.0, step=1.0)
 
-    if st.button("Calculate MLB F5 True Odds"):
-        # 1. Regress wRC+ (65% Season / 35% 14-Day)
-        a_wrc_eff = (0.65 * a_wrc_season) + (0.35 * a_wrc_14d)
-        b_wrc_eff = (0.65 * b_wrc_season) + (0.35 * b_wrc_14d)
+    if st.button("Calculate MLB Fair Edge"):
+        pitching_diff = home_pitcher_siera - away_pitcher_siera
+        offense_diff = (away_wrc - home_wrc) / 100.0
+        logit_score = 0.12 + (pitching_diff * 0.35) + (offense_diff * 0.25)
         
-        # 2. MATCHUP CROSS-OVER:
-        # Team A hits against Team B's Pitcher (b_sp_xfip)
-        a_exp_runs = 2.4 * (a_wrc_eff / 100.0) * (b_sp_xfip / 4.00)
-        
-        # Team B hits against Team A's Pitcher (a_sp_xfip)
-        b_exp_runs = 2.4 * (b_wrc_eff / 100.0) * (a_sp_xfip / 4.00)
-        
-        # 3. Scaled Pythagorean Win Expectancy (gamma = 1.20)
-        gamma = 1.20
-        a_win_prob = (a_exp_runs ** gamma) / ((a_exp_runs ** gamma) + (b_exp_runs ** gamma))
-        
-        a_american = prob_to_american(a_win_prob)
-        b_american = prob_to_american(1 - a_win_prob)
+        away_win_prob = 1 / (1 + np.exp(logit_score))
+        home_win_prob = 1 - away_win_prob
+
+        st.markdown("---")
+        res1, res2 = st.columns(2)
+        res1.metric(f"{away_team} Win Prob / Fair Line", f"{away_win_prob*100:.1f}%", f"{prob_to_american(away_win_prob):+d}")
+        res2.metric(f"{home_team} Win Prob / Fair Line", f"{home_win_prob*100:.1f}%", f"{prob_to_american(home_win_prob):+d}")
+
+# ---------------------------------------------------------
+# 2. UFC SHARP MODEL
+# ---------------------------------------------------------
+elif sport == "UFC (Algorithmic Fight)":
+    st.header("🥊 UFC OMEGA Model")
+    
+    if api_key:
+        with st.expander("📡 Live UFC Outlier Scanner", expanded=True):
+            odds_data = fetch_live_odds(api_key, "mma_mixed_martial_arts")
+            if odds_data:
+                for fight in odds_data:
+                    best_lines = find_best_odds(fight)
+                    if best_lines["home_odds"] != -10000:
+                        st.markdown(f"**{fight['away_team']} vs {fight['home_team']}**")
+                        st.write(f"- 📈 Best {fight['away_team']}: **{best_lines['away_odds']:+d}** ({best_lines['away_book']}) | Best {fight['home_team']}: **{best_lines['home_odds']:+d}** ({best_lines['home_book']})")
+                st.divider()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Fighter A")
+        f1_name = st.text_input("Name", "Fighter A")
+        f1_slpm = st.number_input("Fighter A SLpM", value=3.64)
+        f1_sapm = st.number_input("Fighter A SApM", value=2.25)
+
+    with col2:
+        st.subheader("Fighter B")
+        f2_name = st.text_input("Name", "Fighter B")
+        f2_slpm = st.number_input("Fighter B SLpM", value=4.10)
+        f2_sapm = st.number_input("Fighter B SApM", value=3.80)
+
+    if st.button("Evaluate UFC Matchup"):
+        f1_diff = f1_slpm - f1_sapm
+        f2_diff = f2_slpm - f2_sapm
+        prob_f1 = 1 / (1 + np.exp(-(f1_diff - f2_diff)))
+        prob_f2 = 1 - prob_f1
         
         st.markdown("---")
-        # Direct string formatting for standard American odds (+ or - based on the returned int)
-        st.metric(f"{team_a_name} True Moneyline", f"{a_american:+d}", f"{a_win_prob*100:.1f}% Win Prob")
-        st.metric(f"{team_b_name} True Moneyline", f"{b_american:+d}", f"{(1-a_win_prob)*100:.1f}% Win Prob")
-        st.info(f"Projected F5 Runs: {team_a_name} {a_exp_runs:.2f} - {b_exp_runs:.2f} {team_b_name}")
+        u_col1, u_col2 = st.columns(2)
+        u_col1.metric(f"{f1_name} Fair Odds", f"{prob_f1*100:.1f}%", f"{prob_to_american(prob_f1):+d}")
+        u_col2.metric(f"{f2_name} Fair Odds", f"{prob_f2*100:.1f}%", f"{prob_to_american(prob_f2):+d}")
 
-# =========================================================
-# TAB 2: UFC STYLISTIC ANALYZER
-# =========================================================
+# Placeholder execution blocks for NBA and Tennis
+elif sport == "NBA (Pace & Net Rating)":
+    st.header("🏀 NBA OMEGA Model")
+    st.info("Input dynamic NBA net rating variables here to generate +EV outputs.")
+
+elif sport == "Tennis (Surface Elo)":
+    st.header("🎾 Tennis OMEGA Model")
+    st.info("Input dynamic Tennis Elo variables here to generate +EV outputs.")
+
+# ---------------------------------------------------------
+# GLOBAL EV & KELLY STAKING CALCULATOR
+# ---------------------------------------------------------
+st.markdown("---")
+st.header("📈 Institutional Value & Staking Audit")
+st.markdown("Run your Sharp Market De-Vig or calculate edge against retail books.")
+
+tab1, tab2 = st.tabs(["EV & Staking (Bet Sizing)", "Power Method De-Vigger (Find True Probability)"])
+
+with tab1:
+    ev_col1, ev_col2, ev_col3, ev_col4 = st.columns(4)
+    with ev_col1:
+        model_prob = st.number_input("Your Model Win Prob (%)", value=62.5, min_value=1.0, max_value=99.0) / 100.0
+    with ev_col2:
+        book_odds = st.number_input("Best Book Odds (American)", value=-115)
+    with ev_col3:
+        dec_odds = american_to_decimal(book_odds)
+        ev_val = calculate_ev(model_prob, dec_odds) * 100
+        st.metric("Expected Value (EV %)", f"{ev_val:+.2f}%")
+    with ev_col4:
+        suggested_stake = kelly_criterion(model_prob, dec_odds, kelly_fraction, total_bankroll)
+        st.metric("Recommended Stake", f"${suggested_stake:.2f}")
+
+    if ev_val > 3.0:
+        st.success(f"🔥 MASSIVE EDGE: +{ev_val:.2f}% EV detected. Recommended bet size: **${suggested_stake:.2f}**.")
+    elif ev_val > 0.0:
+        st.info(f"✅ MARGINAL EDGE: +{ev_val:.2f}% EV detected. Recommended bet size: **${suggested_stake:.2f}**.")
+    else:
+        st.error(f"🛑 NEGATIVE VALUE: Do not place this bet. EV is {ev_val:.2f}%.")
+
 with tab2:
-    st.header("🥊 UFC Stylistic Matchup Analyzer")
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Fighter A (Favorite / Striker)")
-        f_a_slpm = st.number_input("SLpM (Strikes Landed/min)", value=4.50, key="a_slpm")
-        f_a_sapm = st.number_input("SApM (Strikes Absorbed/min)", value=3.80, key="a_sapm")
-        f_a_td_avg = st.number_input("TD Avg (Takedowns/15m)", value=0.50, key="a_td")
-        f_a_td_def = st.number_input("TD Def %", value=60.0, key="a_tdd")
-        
-    with c2:
-        st.subheader("Fighter B (Underdog / Grappler)")
-        f_b_slpm = st.number_input("SLpM (Strikes Landed/min)", value=2.80, key="b_slpm")
-        f_b_sapm = st.number_input("SApM (Strikes Absorbed/min)", value=2.10, key="b_sapm")
-        f_b_td_avg = st.number_input("TD Avg (Takedowns/15m)", value=3.20, key="b_td")
-        f_b_td_def = st.number_input("TD Def %", value=75.0, key="b_tdd")
-
-    if st.button("Run UFC Stylistic Check"):
-        st.markdown("---")
-        diff_a = f_a_slpm - f_a_sapm
-        diff_b = f_b_slpm - f_b_sapm
-        
-        st.write(f"**Fighter A Striking Differential:** {diff_a:+.2f}")
-        st.write(f"**Fighter B Striking Differential:** {diff_b:+.2f}")
-        
-        if f_b_td_avg >= 2.50 and f_a_td_def < 65.0:
-            st.error("🔥 STRUCTURAL EDGE FOUND: Fighter B (Grappler) has a massive stylistic advantage over Fighter A's weak Takedown Defense (<65%). High +EV potential on Fighter B.")
-        elif f_a_td_avg >= 2.50 and f_b_td_def < 65.0:
-            st.error("🔥 STRUCTURAL EDGE FOUND: Fighter A (Grappler) has a dominant matchup over Fighter B's TDD.")
-        else:
-            st.success("✅ Market Balanced: No severe stylistic mismatch detected. Line is likely efficient.")
-
-# =========================================================
-# TAB 3: NBA INJURY ADJUSTER
-# =========================================================
-with tab3:
-    st.header("🏀 NBA Live/Pre-Game Injury Line Adjuster")
-    
-    col_n1, col_n2 = st.columns(2)
-    with col_n1:
-        base_spread = st.number_input("Baseline Pinnacle Spread (e.g. -5.5 for Favorite)", value=-5.5)
-        player_tier = st.selectbox("Injured Player Tier", [
-            "Tier 1: MVP / Top 5 Player (~4.5 pts)",
-            "Tier 2: All-Star (~2.5 pts)",
-            "Tier 3: Key Starter (~1.25 pts)"
-        ])
-        team_affected = st.radio("Team Affected", ["Favorite Injured", "Underdog Injured"])
-    
-    with col_n2:
-        minutes_left = st.slider("Minutes Remaining in Game", min_value=0, max_value=48, value=48)
-    
-    if st.button("Calculate Adjusted Spread"):
-        tier_val = 4.5 if "Tier 1" in player_tier else (2.5 if "Tier 2" in player_tier else 1.25)
-        
-        time_fraction = minutes_left / 48.0
-        effective_points = tier_val * time_fraction
-        
-        if team_affected == "Favorite Injured":
-            adjusted_spread = base_spread + effective_points
-        else:
-            adjusted_spread = base_spread - effective_points
-            
-        st.markdown("---")
-        st.subheader(f"True Adjusted Spread: **{adjusted_spread:+.1f}**")
-        st.caption(f"Impact: {effective_points:.2f} points adjusted for {minutes_left} minutes remaining.")
-
-# =========================================================
-# TAB 4: TENNIS LIVE SWING VALIDATOR
-# =========================================================
-with tab4:
-    st.header("🎾 Tennis Live Psychological Swing Validator")
-    st.caption("Valid for ATP/WTA 500, 1000, and Grand Slams ONLY (Requires verified UE/Winner stats).")
-    
-    pre_odds = st.number_input("Pre-Match Odds of Favorite (e.g. -250)", value=-250)
-    surface_win_pct = st.number_input("Favorite Career Win % on Surface", value=70.0)
-    
-    c_t1, c_t2, c_t3 = st.columns(3)
-    with c_t1:
-        lost_set_1 = st.checkbox("Favorite Lost Set 1?")
-    with c_t2:
-        unforced_errors_high = st.checkbox("Lost due to High Unforced Errors (Not Opponent Winners)?")
-    with c_t3:
-        no_injury = st.checkbox("Zero Signs of Injury / Medical Timeouts?")
-        
-    if st.button("Validate Tennis Swing Bet"):
-        st.markdown("---")
-        
-        cond1 = pre_odds <= -200
-        cond2 = surface_win_pct >= 65.0
-        cond3 = lost_set_1 and unforced_errors_high and no_injury
-        
-        if cond1 and cond2 and cond3:
-            st.success("🟢 GREEN LIGHT: +EV Opportunity. Favorite is elite on this surface, healthy, and merely uncalibrated. Buy live line at discount.")
-        else:
-            st.error("🔴 RED LIGHT / PASS: Criteria not satisfied.")
-            if not cond1:
-                st.write("- Pre-match favorite was not heavy enough (needs <= -200).")
-            if not cond2:
-                st.write("- Favorite surface win rate is below 65% threshold.")
-            if not cond3:
-                st.write("- Check lost set status, unforced errors vs winners ratio, or injury concerns.")
+    st.markdown("Enter sharp sportsbook odds (e.g. Circa or Pinnacle) to strip the vig and find the true market probability.")
+    dv_col1, dv_col2, dv_col3 = st.columns(3)
+    with dv_col1:
+        sharp_fav = st.number_input("Sharp Favorite Odds", value=-150)
+    with dv_col2:
+        sharp_dog = st.number_input("Sharp Underdog Odds", value=130)
+    with dv_col3:
+        if st.button("Run Power De-Vig"):
+            true_fav, true_dog = power_devig(sharp_fav, sharp_dog)
+            st.success(f"**True Fav Prob:** {true_fav*100:.2f}% (Fair Line: {prob_to_american(true_fav)})\n\n**True Dog Prob:** {true_dog*100:.2f}% (Fair Line: {prob_to_american(true_dog)})")
