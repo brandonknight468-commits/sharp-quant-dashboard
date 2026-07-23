@@ -29,7 +29,7 @@ def decimal_to_implied(decimal_odds):
 
 def devig_multiplicative(implied_a, implied_b):
     """
-    Strips vigorish (house edge) using the Multiplicative (Equal Proportion) method.
+    Strips vigorish (house edge) using the Multiplicative method.
     Returns fair true probabilities for both sides.
     """
     total_implied = implied_a + implied_b
@@ -38,20 +38,11 @@ def devig_multiplicative(implied_a, implied_b):
     return fair_prob_a, fair_prob_b
 
 def calculate_ev(fair_prob, decimal_odds):
-    """
-    Calculates Expected Value percentage (+EV%).
-    Formula: EV = (Fair Probability * Decimal Odds) - 1
-    """
+    """Calculates Expected Value percentage (+EV%)."""
     return (fair_prob * decimal_odds) - 1.0
 
 def calculate_kelly(fair_prob, decimal_odds, fraction=0.25):
-    """
-    Calculates Fractional Kelly Criterion stake recommendation.
-    b = decimal_odds - 1
-    p = fair_prob
-    q = 1 - p
-    f* = (b*p - q) / b
-    """
+    """Calculates Fractional Kelly Criterion stake recommendation."""
     b = decimal_odds - 1.0
     q = 1.0 - fair_prob
     if b <= 0:
@@ -64,10 +55,14 @@ def calculate_kelly(fair_prob, decimal_odds, fraction=0.25):
 # ---------------------------------------------------------
 st.sidebar.header("⚙️ Scanner Settings")
 
+# Check for API key in Streamlit secrets first as a default
+default_key = st.secrets.get("ODDS_API_KEY", "")
+
 api_key = st.sidebar.text_input(
     "The Odds API Key",
+    value=default_key,
     type="password",
-    help="Get a free API key at https://the-odds-api.com"
+    help="Get an API key at https://the-odds-api.com"
 )
 
 bankroll = st.sidebar.number_input("Bankroll ($)", value=1000.0, step=100.0)
@@ -90,6 +85,8 @@ selected_sports = st.sidebar.multiselect(
 # FETCH & PROCESS ODDS DATA
 # ---------------------------------------------------------
 ev_opportunities = []
+total_games_scanned = 0
+games_with_pinnacle = 0
 
 if st.button("🚀 Scan Markets for +EV Bets", type="primary"):
     if not api_key:
@@ -107,11 +104,24 @@ if st.button("🚀 Scan Markets for +EV Bets", type="primary"):
                 
                 try:
                     response = requests.get(url, params=params)
+                    
+                    # Track & display API quota usage in sidebar
+                    requests_remaining = response.headers.get("x-requests-remaining")
+                    requests_used = response.headers.get("x-requests-used")
+                    if requests_remaining is not None:
+                        st.sidebar.caption(f"📊 **Quota:** {requests_remaining} remaining ({requests_used} used)")
+
+                    # Surface non-200 API errors directly to the UI
                     if response.status_code != 200:
+                        err_msg = response.json().get('message', response.text)
+                        st.error(f"⚠️ **API Error ({response.status_code})** for `{sport}`: {err_msg}")
                         continue
+
                     games = response.json()
+                    total_games_scanned += len(games)
+
                 except Exception as e:
-                    st.error(f"Error connecting to API: {e}")
+                    st.error(f"Connection Error: {e}")
                     break
 
                 for game in games:
@@ -123,9 +133,9 @@ if st.button("🚀 Scan Markets for +EV Bets", type="primary"):
                     for book in game.get('bookmakers', []):
                         if book['key'] == 'pinnacle':
                             sharp_book = book
+                            games_with_pinnacle += 1
                             break
                     
-                    # If Pinnacle is not available for this event, skip
                     if not sharp_book:
                         continue
                     
@@ -153,7 +163,7 @@ if st.button("🚀 Scan Markets for +EV Bets", type="primary"):
                     # Compare sharp fair prices against soft sportsbooks
                     for book in game.get('bookmakers', []):
                         if book['key'] == 'pinnacle':
-                            continue # Skip the sharp book itself
+                            continue
                         
                         book_name = book['title']
                         for outcome in book['markets'][0]['outcomes']:
@@ -194,9 +204,19 @@ if ev_opportunities:
     col3.metric("Bankroll Size", f"${bankroll:,.2f}")
     
     st.subheader("🎯 Identified Positive Expected Value Plays")
-    st.dataframe(
-        df.style.background_gradient(subset=["+EV Edge"], cmap="Greens"),
-        use_container_width=True
-    )
+    
+    # Safe rendering in case matplotlib isn't installed
+    try:
+        st.dataframe(
+            df.style.background_gradient(subset=["+EV Edge"], cmap="Greens"),
+            use_container_width=True
+        )
+    except Exception:
+        st.dataframe(df, use_container_width=True)
+
 else:
-    st.info("Click 'Scan Markets for +EV Bets' to search for mispriced lines across selected sports.")
+    if total_games_scanned > 0:
+        st.warning(f"Scanned **{total_games_scanned} games** across selected sports ({games_with_pinnacle} had Pinnacle odds posted), but no bets met your **+{min_ev}% EV** threshold.")
+        st.info("💡 **Tip:** Try lowering your 'Min +EV Threshold (%)' slider to `0.0%` to view near-fair market lines.")
+    else:
+        st.info("Click 'Scan Markets for +EV Bets' to search for mispriced lines across selected sports.")
