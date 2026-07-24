@@ -1,7 +1,3 @@
-Here is the updated app.py script hardcoded to use the Power Method for devigging.
-Why Power Devigging is Superior
-The Power Method solves for an exponent k such that (p_1)^k + (p_2)^k = 1.0. Unlike simple multiplicative devigging (which strips juice evenly), Power Devigging naturally accounts for favorite-longshot bias—recognizing that sportsbooks load disproportionately more juice into longshot underdogs than heavy favorites.
-Complete Code (app.py)
 import streamlit as st
 import requests
 import pandas as pd
@@ -34,14 +30,14 @@ def decimal_to_american(dec):
 def devig_power(implied_a, implied_b):
     """
     Strips vig strictly using the Power Method (Power Devigging).
-    Solves for exponent k such that (implied_a)^k + (implied_b)^k = 1.0
+    Solves for exponent k such that (implied_a)^k + (implied_b)^k = 1.0.
     Accounts for favorite-longshot bias.
     """
     total_implied = implied_a + implied_b
     if total_implied <= 1.0:
         return implied_a, implied_b
 
-    # High-precision bisection search to solve for k
+    # High-precision bisection search to solve for exponent k
     low, high = 1.0, 20.0
     for _ in range(50):
         mid = (low + high) / 2.0
@@ -61,7 +57,8 @@ def calculate_ev(fair_prob, target_odds_american):
 def calculate_kelly(fair_prob, target_odds_american, fraction, bankroll):
     b = american_to_decimal(target_odds_american) - 1.0
     q = 1.0 - fair_prob
-    if b <= 0: return 0.0
+    if b <= 0:
+        return 0.0
     f_star = (b * fair_prob - q) / b
     return max(0.0, round(f_star * fraction * bankroll, 2))
 
@@ -90,7 +87,7 @@ min_ev = st.sidebar.slider("Min EV Edge (%)", 0.0, 10.0, 1.5, 0.1)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📐 Model Engine")
-st.sidebar.info("⚡ **Devig Engine:** Power Method (Unabated Standard)")
+st.sidebar.info("⚡ Devig Engine: Power Method (Unabated Standard)")
 
 # Consensus Sharp Books
 SHARP_BOOKS = ["pinnacle", "bookmaker", "circasports", "betonlineag"]
@@ -140,7 +137,8 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                         req_remaining = res.headers['x-requests-remaining']
                         req_used = res.headers['x-requests-used']
 
-                    if res.status_code != 200: continue
+                    if res.status_code != 200:
+                        continue
                     data = res.json()
                     
                     for event in data:
@@ -158,10 +156,12 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                                                 sharp_implied[out['name']] = []
                                             sharp_implied[out['name']].append(1.0 / american_to_decimal(out['price']))
 
-                        if len(sharp_implied) != 2: continue
+                        if len(sharp_implied) != 2:
+                            continue
                         
                         outcomes = list(sharp_implied.keys())
-                        if not sharp_implied[outcomes[0]] or not sharp_implied[outcomes[1]]: continue
+                        if not sharp_implied[outcomes[0]] or not sharp_implied[outcomes[1]]:
+                            continue
 
                         avg_implied_a = sum(sharp_implied[outcomes[0]]) / len(sharp_implied[outcomes[0]])
                         avg_implied_b = sum(sharp_implied[outcomes[1]]) / len(sharp_implied[outcomes[1]])
@@ -174,7 +174,8 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
 
                         # 3. HUNT SOFT BOOKS FOR +EV DISCREPANCIES
                         for book_key, book in bookies.items():
-                            if book_key in SHARP_BOOKS: continue
+                            if book_key in SHARP_BOOKS:
+                                continue
                                 
                             for market in book.get('markets', []):
                                 if market['key'] == 'h2h':
@@ -210,7 +211,7 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
             # 5. RENDER DATAFRAME
             # ==============================================================================
             if req_remaining is not None:
-                st.caption(f"**Diagnostics:** Scan completed. {req_remaining} API credits remaining.")
+                st.caption(f"Diagnostics: Scan completed. {req_remaining} API credits remaining.")
 
             if ev_opportunities:
                 df = pd.DataFrame(ev_opportunities)
@@ -219,8 +220,7 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                 formatted_df = df.copy()
                 formatted_df['+EV Edge'] = formatted_df['+EV Edge'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"**{len(df)} positive EV opportunities found using Power Devigging.**")
+                st.success(f"Found {len(df)} positive EV opportunities using Power Devigging.")
                 st.dataframe(formatted_df, use_container_width=True, hide_index=True)
             else:
                 st.warning("No edges found meeting the strict power consensus criteria right now.")
-
