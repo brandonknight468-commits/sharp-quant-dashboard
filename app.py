@@ -1,19 +1,22 @@
+Here is the updated app.py script hardcoded to use the Power Method for devigging.
+Why Power Devigging is Superior
+The Power Method solves for an exponent k such that (p_1)^k + (p_2)^k = 1.0. Unlike simple multiplicative devigging (which strips juice evenly), Power Devigging naturally accounts for favorite-longshot bias—recognizing that sportsbooks load disproportionately more juice into longshot underdogs than heavy favorites.
+Complete Code (app.py)
 import streamlit as st
 import requests
 import pandas as pd
-import time
 
 # ==============================================================================
 # 1. PAGE CONFIGURATION
 # ==============================================================================
 st.set_page_config(
-    page_title="Pro +EV Odds Terminal",
+    page_title="Pro +EV Odds Terminal (Power Method)",
     page_icon="📈",
     layout="wide"
 )
 
 # ==============================================================================
-# 2. HELPER CALCULATIONS & DEVIGGING MATH
+# 2. HELPER CALCULATIONS & POWER DEVIGGING MATH
 # ==============================================================================
 def american_to_decimal(american):
     if american > 0:
@@ -28,19 +31,28 @@ def decimal_to_american(dec):
         return int(round(-100 / (dec - 1.0)))
     return 0
 
-def devig_lines(implied_a, implied_b, method="Multiplicative"):
-    """Strips vig using either Multiplicative (Proportional) or Additive (Margin) methods."""
+def devig_power(implied_a, implied_b):
+    """
+    Strips vig strictly using the Power Method (Power Devigging).
+    Solves for exponent k such that (implied_a)^k + (implied_b)^k = 1.0
+    Accounts for favorite-longshot bias.
+    """
     total_implied = implied_a + implied_b
     if total_implied <= 1.0:
-        return implied_a, implied_b # No vig to strip
-        
-    if method == "Multiplicative":
-        return implied_a / total_implied, implied_b / total_implied
-    elif method == "Additive":
-        margin_per_side = (total_implied - 1.0) / 2.0
-        return implied_a - margin_per_side, implied_b - margin_per_side
-    
-    return implied_a, implied_b
+        return implied_a, implied_b
+
+    # High-precision bisection search to solve for k
+    low, high = 1.0, 20.0
+    for _ in range(50):
+        mid = (low + high) / 2.0
+        val = (implied_a ** mid) + (implied_b ** mid)
+        if val > 1.0:
+            low = mid
+        else:
+            high = mid
+
+    k = (low + high) / 2.0
+    return implied_a ** k, implied_b ** k
 
 def calculate_ev(fair_prob, target_odds_american):
     target_dec = american_to_decimal(target_odds_american)
@@ -53,19 +65,19 @@ def calculate_kelly(fair_prob, target_odds_american, fraction, bankroll):
     f_star = (b * fair_prob - q) / b
     return max(0.0, round(f_star * fraction * bankroll, 2))
 
-@st.cache_data(ttl=60) # Caches data for 60 seconds to save API credits
+@st.cache_data(ttl=60)
 def get_active_tennis_tournaments(api_key):
     try:
         res = requests.get("https://api.the-odds-api.com/v4/sports", params={"apiKey": api_key}, timeout=10)
         if res.status_code == 200:
             return [sport['key'] for sport in res.json() if 'tennis' in sport.get('key', '')]
-    except: pass
+    except Exception:
+        pass
     return []
 
 # ==============================================================================
-# 3. SIDEBAR CONTROLS (THE TERMINAL)
+# 3. SIDEBAR CONTROLS
 # ==============================================================================
-st.sidebar.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Function-graph.svg/1024px-Function-graph.svg.png", width=50)
 st.sidebar.title("Terminal Settings")
 
 api_key = st.sidebar.text_input("The Odds API Key", type="password")
@@ -77,31 +89,37 @@ kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05, hel
 min_ev = st.sidebar.slider("Min EV Edge (%)", 0.0, 10.0, 1.5, 0.1)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("📐 Model Parameters")
-devig_method = st.sidebar.selectbox("Devigging Method", ["Multiplicative", "Additive"])
+st.sidebar.subheader("📐 Model Engine")
+st.sidebar.info("⚡ **Devig Engine:** Power Method (Unabated Standard)")
 
-# Define the sharp bookmakers to build the Consensus Line
+# Consensus Sharp Books
 SHARP_BOOKS = ["pinnacle", "bookmaker", "circasports", "betonlineag"]
 
 selected_sports = st.sidebar.multiselect(
     "Select Sports to Scan",
     options=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"],
-    default=["baseball_mlb", "mma_mixed_martial_arts"]
+    default=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"],
+    format_func=lambda x: {
+        "baseball_mlb": "⚾ MLB",
+        "basketball_nba": "🏀 NBA",
+        "mma_mixed_martial_arts": "🥊 UFC / MMA",
+        "tennis": "🎾 Tennis (All Active Tournaments)"
+    }.get(x, x)
 )
 
 # ==============================================================================
 # 4. MAIN INTERFACE & SCAN LOGIC
 # ==============================================================================
 st.title("📈 Consensus Sharp Market Scanner")
-st.markdown(f"**Devigging Engine:** `{devig_method}` | **Consensus Base:** `Pinnacle, Circa, Bookmaker, BetOnline`")
+st.markdown("**Devigging Engine:** `Power Method` | **Consensus Base:** `Pinnacle, Circa, Bookmaker, BetOnline`")
 
 if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True):
     if not api_key:
         st.error("API Key required. Please input in the sidebar.")
     else:
-        with st.spinner("Compiling Consensus Sharp Lines..."):
+        with st.spinner("Compiling Consensus Sharp Lines & Power Devigging..."):
             
-            # Resolve Tennis
+            # Resolve Sports & Active Tennis Tournaments
             sports_to_scan = []
             for sport in selected_sports:
                 if sport == "tennis":
@@ -138,29 +156,25 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                                         for out in market['outcomes']:
                                             if out['name'] not in sharp_implied:
                                                 sharp_implied[out['name']] = []
-                                            # Convert American to Implied Prob
                                             sharp_implied[out['name']].append(1.0 / american_to_decimal(out['price']))
 
-                        # Need exactly two outcomes and at least one sharp book to proceed
                         if len(sharp_implied) != 2: continue
                         
                         outcomes = list(sharp_implied.keys())
                         if not sharp_implied[outcomes[0]] or not sharp_implied[outcomes[1]]: continue
 
-                        # Average the implied probabilities across all available sharp books
                         avg_implied_a = sum(sharp_implied[outcomes[0]]) / len(sharp_implied[outcomes[0]])
                         avg_implied_b = sum(sharp_implied[outcomes[1]]) / len(sharp_implied[outcomes[1]])
                         
-                        # Calculate market hold (Vig)
                         market_hold_pct = (avg_implied_a + avg_implied_b - 1.0) * 100
 
-                        # Devig using the selected model
-                        fair_p_a, fair_p_b = devig_lines(avg_implied_a, avg_implied_b, devig_method)
+                        # 2. DEVIG USING POWER METHOD
+                        fair_p_a, fair_p_b = devig_power(avg_implied_a, avg_implied_b)
                         fair_probs = {outcomes[0]: fair_p_a, outcomes[1]: fair_p_b}
 
-                        # 2. HUNT FOR SOFT LINE DISCREPANCIES
+                        # 3. HUNT SOFT BOOKS FOR +EV DISCREPANCIES
                         for book_key, book in bookies.items():
-                            if book_key in SHARP_BOOKS: continue # Don't bet on the sharps
+                            if book_key in SHARP_BOOKS: continue
                                 
                             for market in book.get('markets', []):
                                 if market['key'] == 'h2h':
@@ -182,7 +196,7 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                                                     "Selection": team,
                                                     "Soft Book": book['title'],
                                                     "Soft Odds": f"{soft_odds:+d}" if soft_odds > 0 else str(soft_odds),
-                                                    "No-Vig Fair Odds": f"{no_vig_american:+d}" if no_vig_american > 0 else str(no_vig_american),
+                                                    "Power Fair Odds": f"{no_vig_american:+d}" if no_vig_american > 0 else str(no_vig_american),
                                                     "True Win %": f"{true_prob * 100:.1f}%",
                                                     "Sharp Hold": f"{market_hold_pct:.1f}%",
                                                     "+EV Edge": ev_pct,
@@ -193,7 +207,7 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                     st.error(f"Failed to scan {sport}: {e}")
 
             # ==============================================================================
-            # 5. RENDER THE PROFESSIONAL DATAFRAME
+            # 5. RENDER DATAFRAME
             # ==============================================================================
             if req_remaining is not None:
                 st.caption(f"**Diagnostics:** Scan completed. {req_remaining} API credits remaining.")
@@ -202,11 +216,11 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                 df = pd.DataFrame(ev_opportunities)
                 df = df.sort_values(by="+EV Edge", ascending=False)
                 
-                # Format EV Edge column as percentage string for display
                 formatted_df = df.copy()
                 formatted_df['+EV Edge'] = formatted_df['+EV Edge'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"**{len(df)} positive EV opportunities found across global markets.**")
+                st.success(f"**{len(df)} positive EV opportunities found using Power Devigging.**")
                 st.dataframe(formatted_df, use_container_width=True, hide_index=True)
             else:
-                st.warning("No edges found meeting the strict consensus criteria right now. The market is highly efficient.")
+                st.warning("No edges found meeting the strict power consensus criteria right now.")
+
