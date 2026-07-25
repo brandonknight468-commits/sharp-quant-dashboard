@@ -6,7 +6,7 @@ import pandas as pd
 # 1. PAGE CONFIGURATION
 # ==============================================================================
 st.set_page_config(
-    page_title="Pro +EV Odds Terminal (Power Method)",
+    page_title="Pro +EV Odds Terminal (MD Edition)",
     page_icon="📈",
     layout="wide"
 )
@@ -28,16 +28,11 @@ def decimal_to_american(dec):
     return 0
 
 def devig_power(implied_a, implied_b):
-    """
-    Strips vig strictly using the Power Method (Power Devigging).
-    Solves for exponent k such that (implied_a)^k + (implied_b)^k = 1.0.
-    Accounts for favorite-longshot bias.
-    """
+    """Strips vig strictly using the Power Method."""
     total_implied = implied_a + implied_b
     if total_implied <= 1.0:
         return implied_a, implied_b
 
-    # High-precision bisection search to solve for exponent k
     low, high = 1.0, 20.0
     for _ in range(50):
         mid = (low + high) / 2.0
@@ -82,14 +77,21 @@ api_key = st.sidebar.text_input("The Odds API Key", type="password")
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
 bankroll = st.sidebar.number_input("Total Bankroll ($)", min_value=10.0, value=1000.0, step=100.0)
-kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05, help="0.25 = Quarter Kelly (Recommended)")
-min_ev = st.sidebar.slider("Min EV Edge (%)", 0.0, 10.0, 1.5, 0.1)
+kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05)
+
+# NEW: Range slider for strictly targeting the 2-3% EV sweet spot
+ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.0, value=(2.0, 3.0), step=0.1)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📍 Location Setup")
+# NEW: Maryland Legal Books Filter
+MD_BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "betrivers", "espnbet", "pointsbetus", "fanatics"]
+md_filter = st.sidebar.checkbox("Show ONLY Maryland Legal Books", value=True, help="Hides offshore and out-of-state sportsbooks.")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📐 Model Engine")
-st.sidebar.info("⚡ Devig Engine: Power Method (Unabated Standard)")
+st.sidebar.info("⚡ Devig Engine: Power Method")
 
-# Consensus Sharp Books
 SHARP_BOOKS = ["pinnacle", "bookmaker", "circasports", "betonlineag"]
 
 selected_sports = st.sidebar.multiselect(
@@ -100,7 +102,7 @@ selected_sports = st.sidebar.multiselect(
         "baseball_mlb": "⚾ MLB",
         "basketball_nba": "🏀 NBA",
         "mma_mixed_martial_arts": "🥊 UFC / MMA",
-        "tennis": "🎾 Tennis (All Active Tournaments)"
+        "tennis": "🎾 Tennis (Active)"
     }.get(x, x)
 )
 
@@ -108,7 +110,7 @@ selected_sports = st.sidebar.multiselect(
 # 4. MAIN INTERFACE & SCAN LOGIC
 # ==============================================================================
 st.title("📈 Consensus Sharp Market Scanner")
-st.markdown("**Devigging Engine:** `Power Method` | **Consensus Base:** `Pinnacle, Circa, Bookmaker, BetOnline`")
+st.markdown("**Filters:** `Power Method` | `Maryland Legal Books` | `EV Edge: " + f"{ev_range[0]}% - {ev_range[1]}%" + "`")
 
 if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True):
     if not api_key:
@@ -116,7 +118,6 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
     else:
         with st.spinner("Compiling Consensus Sharp Lines & Power Devigging..."):
             
-            # Resolve Sports & Active Tennis Tournaments
             sports_to_scan = []
             for sport in selected_sports:
                 if sport == "tennis":
@@ -172,9 +173,13 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                         fair_p_a, fair_p_b = devig_power(avg_implied_a, avg_implied_b)
                         fair_probs = {outcomes[0]: fair_p_a, outcomes[1]: fair_p_b}
 
-                        # 3. HUNT SOFT BOOKS FOR +EV DISCREPANCIES
+                        # 3. HUNT SOFT BOOKS FOR TARGET DISCREPANCIES
                         for book_key, book in bookies.items():
                             if book_key in SHARP_BOOKS:
+                                continue
+                            
+                            # Filter for Maryland books if the checkbox is checked
+                            if md_filter and book_key not in MD_BOOKS:
                                 continue
                                 
                             for market in book.get('markets', []):
@@ -187,7 +192,8 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                                             true_prob = fair_probs[team]
                                             ev_pct = calculate_ev(true_prob, soft_odds)
                                             
-                                            if ev_pct >= min_ev:
+                                            # Strict filter for 2-3% (or whatever range is selected)
+                                            if ev_range[0] <= ev_pct <= ev_range[1]:
                                                 stake = calculate_kelly(true_prob, soft_odds, kelly_fraction, bankroll)
                                                 no_vig_american = decimal_to_american(1.0 / true_prob)
                                                 
@@ -220,7 +226,7 @@ if st.button("⚡ Execute Market Scan", type="primary", use_container_width=True
                 formatted_df = df.copy()
                 formatted_df['+EV Edge'] = formatted_df['+EV Edge'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"Found {len(df)} positive EV opportunities using Power Devigging.")
+                st.success(f"Found {len(df)} positive EV opportunities strictly between {ev_range[0]}% and {ev_range[1]}% in Maryland.")
                 st.dataframe(formatted_df, use_container_width=True, hide_index=True)
             else:
-                st.warning("No edges found meeting the strict power consensus criteria right now.")
+                st.warning(f"No edges found exactly between {ev_range[0]}% and {ev_range[1]}% on Maryland books right now.")
