@@ -4,16 +4,33 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ==============================================================================
-# 1. PAGE CONFIGURATION
+# 1. PAGE CONFIGURATION & CONSTANTS
 # ==============================================================================
 st.set_page_config(
-    page_title="Pro +EV Odds Terminal (Turbo MD)",
+    page_title="Pro +EV Terminal (Mega Scanner)",
     page_icon="⚡",
     layout="wide"
 )
 
+# Your preferred books to bet on (TheScore Bet runs on the ESPN BET / PENN engine in the US)
+MD_BOOKS = ["draftkings", "fanduel", "espnbet"]
+
+# Sharp benchmark for Main Lines (ML, Spreads, Totals)
+SHARP_BOOKS_MAIN = ["pinnacle", "bookmaker", "circasports", "betonlineag"]
+
+# Sharp benchmark for Player Props (Using major market consensus to find edges on DK/FD/ESPN)
+SHARP_BOOKS_PROPS = ["betmgm", "caesars", "betrivers", "bovada", "betonlineag"]
+
+# Map out the exact prop markets The Odds API accepts per sport
+PROP_MARKETS = {
+    "baseball_mlb": "batter_home_runs,pitcher_strikeouts,batter_hits,batter_rbis",
+    "basketball_nba": "player_points,player_rebounds,player_assists,player_threes",
+    "mma_mixed_martial_arts": "", 
+    "tennis": ""
+}
+
 # ==============================================================================
-# 2. HELPER CALCULATIONS & POWER DEVIGGING MATH
+# 2. HELPER CALCULATIONS
 # ==============================================================================
 def american_to_decimal(american):
     if american > 0:
@@ -29,11 +46,9 @@ def decimal_to_american(dec):
     return 0
 
 def devig_power(implied_a, implied_b):
-    """Strips vig strictly using the Power Method."""
     total_implied = implied_a + implied_b
     if total_implied <= 1.0:
         return implied_a, implied_b
-
     low, high = 1.0, 20.0
     for _ in range(50):
         mid = (low + high) / 2.0
@@ -42,7 +57,6 @@ def devig_power(implied_a, implied_b):
             low = mid
         else:
             high = mid
-
     k = (low + high) / 2.0
     return implied_a ** k, implied_b ** k
 
@@ -53,8 +67,7 @@ def calculate_ev(fair_prob, target_odds_american):
 def calculate_kelly(fair_prob, target_odds_american, fraction, bankroll):
     b = american_to_decimal(target_odds_american) - 1.0
     q = 1.0 - fair_prob
-    if b <= 0:
-        return 0.0
+    if b <= 0: return 0.0
     f_star = (b * fair_prob - q) / b
     return max(0.0, round(f_star * fraction * bankroll, 2))
 
@@ -64,181 +77,252 @@ def get_active_tennis_tournaments(api_key):
         res = requests.get("https://api.the-odds-api.com/v4/sports", params={"apiKey": api_key}, timeout=5)
         if res.status_code == 200:
             return [sport['key'] for sport in res.json() if 'tennis' in sport.get('key', '')]
-    except Exception:
-        pass
+    except: pass
     return []
 
 # ==============================================================================
-# 3. PARALLEL API WORKER
+# 3. PARALLEL API WORKERS
 # ==============================================================================
-def fetch_odds_worker(sport, api_key, session):
-    """Fetches odds for a single sport using a shared high-performance session."""
+def fetch_odds_worker(sport, markets, api_key, session):
+    """Fetches bulk Main Lines (ML, Spreads, Totals) for all events."""
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-    params = {'apiKey': api_key, 'regions': 'us,eu', 'markets': 'h2h', 'oddsFormat': 'american'}
+    params = {'apiKey': api_key, 'regions': 'us,eu', 'markets': markets, 'oddsFormat': 'american'}
     try:
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
-            headers = res.headers
-            return sport, res.json(), headers.get('x-requests-remaining')
-    except Exception:
-        pass
+            return sport, res.json(), res.headers.get('x-requests-remaining')
+    except: pass
+    return sport, None, None
+
+def fetch_events_worker(sport, api_key, session):
+    """Fetches event IDs if user ONLY wants props."""
+    url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
+    params = {'apiKey': api_key}
+    try:
+        res = session.get(url, params=params, timeout=5)
+        if res.status_code == 200:
+            return sport, res.json(), res.headers.get('x-requests-remaining')
+    except: pass
+    return sport, [], None
+
+def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
+    """Fetches Player Props for a SPECIFIC event."""
+    url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds/"
+    params = {'apiKey': api_key, 'regions': 'us,eu', 'markets': prop_markets, 'oddsFormat': 'american'}
+    try:
+        res = session.get(url, params=params, timeout=5)
+        if res.status_code == 200:
+            return sport, [res.json()], res.headers.get('x-requests-remaining')
+    except: pass
     return sport, None, None
 
 # ==============================================================================
-# 4. SIDEBAR CONTROLS
+# 4. UI SIDEBAR CONTROLS
 # ==============================================================================
 st.sidebar.title("Terminal Settings")
-
 api_key = st.sidebar.text_input("The Odds API Key", type="password")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🎯 Markets to Scan")
+scan_main = st.sidebar.checkbox("Main Lines (ML, Spreads, Totals)", value=True)
+scan_props = st.sidebar.checkbox("Player Props (⚠️ High API Cost)", value=False)
+st.sidebar.caption("Props require 1 extra API query PER GAME. Watch your quota!")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
 bankroll = st.sidebar.number_input("Total Bankroll ($)", min_value=10.0, value=1000.0, step=100.0)
 kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05)
-
-ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.0, value=(2.0, 3.0), step=0.1)
+ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.0, value=(2.0, 5.0), step=0.1)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 Location Setup")
-MD_BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "betrivers", "espnbet", "pointsbetus", "fanatics"]
-md_filter = st.sidebar.checkbox("Show ONLY Maryland Legal Books", value=True)
+md_filter = st.sidebar.checkbox("Show ONLY Preferred Books (DK, FD, TheScore/ESPN)", value=True)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("📐 Model Engine")
-st.sidebar.info("⚡ Devig Engine: Power Method\n⚡ Network Engine: Multithreaded Parallel")
-
-SHARP_BOOKS = ["pinnacle", "bookmaker", "circasports", "betonlineag"]
-
 selected_sports = st.sidebar.multiselect(
-    "Select Sports to Scan",
+    "Select Sports",
     options=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"],
-    default=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"],
-    format_func=lambda x: {
-        "baseball_mlb": "⚾ MLB",
-        "basketball_nba": "🏀 NBA",
-        "mma_mixed_martial_arts": "🥊 UFC / MMA",
-        "tennis": "🎾 Tennis (Active)"
-    }.get(x, x)
+    default=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"]
 )
 
 # ==============================================================================
-# 5. MAIN INTERFACE & SCAN LOGIC
+# 5. EXECUTION & LOGIC
 # ==============================================================================
-st.title("⚡ Ultra-Fast Consensus Market Scanner")
-st.markdown("**Engine:** `Parallel Power Devig` | **Location:** `Maryland` | **EV Target:** `" + f"{ev_range[0]}% - {ev_range[1]}%" + "`")
+st.title("⚡ Multi-Market Consensus Scanner")
 
 if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=True):
     if not api_key:
-        st.error("API Key required. Please input in the sidebar.")
+        st.error("API Key required.")
+    elif not scan_main and not scan_props:
+        st.warning("Please select at least one market type to scan (Main Lines or Props).")
     else:
-        with st.spinner("Executing parallel multi-threaded scan..."):
+        with st.spinner("Firing multi-threaded network requests..."):
             
-            # 1. Resolve sports list
             sports_to_scan = []
             for sport in selected_sports:
                 if sport == "tennis":
                     sports_to_scan.extend(get_active_tennis_tournaments(api_key))
-                else:
-                    sports_to_scan.append(sport)
+                else: sports_to_scan.append(sport)
 
             ev_opportunities = []
             req_remaining = None
-
-            # 2. PARALLEL FETCHING (Shoots all HTTP calls at once)
+            event_ids_by_sport = {s: [] for s in sports_to_scan}
+            
             session = requests.Session()
             raw_results = []
             
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = [executor.submit(fetch_odds_worker, sport, api_key, session) for sport in sports_to_scan]
-                for future in as_completed(futures):
-                    sport, data, remaining = future.result()
-                    if data:
-                        raw_results.append((sport, data))
-                    if remaining:
-                        req_remaining = remaining
+            # --- PHASE 1: Main Lines (Bulk Fetch) ---
+            if scan_main:
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = [executor.submit(fetch_odds_worker, sport, "h2h,spreads,totals", api_key, session) for sport in sports_to_scan]
+                    for future in as_completed(futures):
+                        sport, data, remaining = future.result()
+                        if data:
+                            raw_results.append((sport, data))
+                            for event in data:
+                                if event['id'] not in event_ids_by_sport[sport]:
+                                    event_ids_by_sport[sport].append(event['id'])
+                        if remaining: req_remaining = remaining
 
-            # 3. PROCESS ALL PARALLEL DATA
+            # --- PHASE 2: Player Props (Per-Event Fetch) ---
+            if scan_props:
+                if not scan_main:
+                    with ThreadPoolExecutor(max_workers=10) as executor:
+                        futures = [executor.submit(fetch_events_worker, sport, api_key, session) for sport in sports_to_scan]
+                        for future in as_completed(futures):
+                            sport, events_data, remaining = future.result()
+                            if events_data:
+                                for event in events_data:
+                                    event_ids_by_sport[sport].append(event['id'])
+                            if remaining: req_remaining = remaining
+
+                prop_futures = []
+                with ThreadPoolExecutor(max_workers=15) as executor:
+                    for sport, e_ids in event_ids_by_sport.items():
+                        p_markets = PROP_MARKETS.get(sport, "")
+                        if p_markets:
+                            for e_id in e_ids:
+                                prop_futures.append(executor.submit(fetch_props_worker, sport, e_id, p_markets, api_key, session))
+                    
+                    for future in as_completed(prop_futures):
+                        sport, data, remaining = future.result()
+                        if data:
+                            raw_results.append((sport, data))
+                        if remaining: req_remaining = remaining
+
+            # --- PHASE 3: Dynamic Devig Engine ---
             for sport, data in raw_results:
                 for event in data:
                     matchup = f"{event.get('away_team')} @ {event.get('home_team')}"
                     bookies = {b['key']: b for b in event.get('bookmakers', [])}
                     
-                    # Sharp Consensus
-                    sharp_implied = {}
-                    for sharp in SHARP_BOOKS:
-                        if sharp in bookies:
-                            for market in bookies[sharp].get('markets', []):
-                                if market['key'] == 'h2h' and len(market['outcomes']) == 2:
-                                    for out in market['outcomes']:
-                                        if out['name'] not in sharp_implied:
-                                            sharp_implied[out['name']] = []
-                                        sharp_implied[out['name']].append(1.0 / american_to_decimal(out['price']))
-
-                    if len(sharp_implied) != 2:
-                        continue
+                    true_probs_accum = {}
+                    sharp_holds = {}
                     
-                    outcomes = list(sharp_implied.keys())
-                    if not sharp_implied[outcomes[0]] or not sharp_implied[outcomes[1]]:
-                        continue
-
-                    avg_implied_a = sum(sharp_implied[outcomes[0]]) / len(sharp_implied[outcomes[0]])
-                    avg_implied_b = sum(sharp_implied[outcomes[1]]) / len(sharp_implied[outcomes[1]])
-                    
-                    market_hold_pct = (avg_implied_a + avg_implied_b - 1.0) * 100
-
-                    # Power Devig
-                    fair_p_a, fair_p_b = devig_power(avg_implied_a, avg_implied_b)
-                    fair_probs = {outcomes[0]: fair_p_a, outcomes[1]: fair_p_b}
-
-                    # Soft Book Hunting
+                    # 3A. Dynamic Sharp Consensus (Main vs. Props)
                     for book_key, book in bookies.items():
-                        if book_key in SHARP_BOOKS:
-                            continue
-                        
-                        if md_filter and book_key not in MD_BOOKS:
+                        for market in book.get('markets', []):
+                            m_key = market['key']
+                            
+                            is_main_line = m_key in ['h2h', 'spreads', 'totals']
+                            active_sharps = SHARP_BOOKS_MAIN if is_main_line else SHARP_BOOKS_PROPS
+                            
+                            if book_key not in active_sharps: 
+                                continue
+                            
+                            groups = {}
+                            for out in market['outcomes']:
+                                desc = out.get('description', 'Game')
+                                pt = out.get('point')
+                                g_key = f"{m_key}_{desc}_{abs(pt) if pt is not None else 'None'}"
+                                if g_key not in groups: groups[g_key] = []
+                                groups[g_key].append(out)
+                            
+                            for g_key, outs in groups.items():
+                                if len(outs) == 2:
+                                    try:
+                                        implied_a = 1.0 / american_to_decimal(outs[0]['price'])
+                                        implied_b = 1.0 / american_to_decimal(outs[1]['price'])
+                                    except: continue
+                                        
+                                    market_hold_pct = (implied_a + implied_b - 1.0) * 100
+                                    fair_a, fair_b = devig_power(implied_a, implied_b)
+                                    
+                                    b_key_a = (m_key, outs[0]['name'], outs[0].get('description', 'Game'), outs[0].get('point'))
+                                    b_key_b = (m_key, outs[1]['name'], outs[1].get('description', 'Game'), outs[1].get('point'))
+                                    
+                                    if b_key_a not in true_probs_accum: true_probs_accum[b_key_a] = []
+                                    if b_key_b not in true_probs_accum: true_probs_accum[b_key_b] = []
+                                        
+                                    true_probs_accum[b_key_a].append(fair_a)
+                                    true_probs_accum[b_key_b].append(fair_b)
+                                    sharp_holds[b_key_a] = market_hold_pct
+                                    sharp_holds[b_key_b] = market_hold_pct
+                                    
+                    if not true_probs_accum: continue
+                    true_probs = {k: sum(v)/len(v) for k, v in true_probs_accum.items()}
+                    
+                    # 3B. Target Book Hunting (DK, FD, TheScore/ESPN)
+                    for book_key, book in bookies.items():
+                        if md_filter and book_key not in MD_BOOKS: 
                             continue
                             
                         for market in book.get('markets', []):
-                            if market['key'] == 'h2h':
-                                for out in market['outcomes']:
-                                    team = out['name']
+                            m_key = market['key']
+                            is_main_line = m_key in ['h2h', 'spreads', 'totals']
+                            active_sharps = SHARP_BOOKS_MAIN if is_main_line else SHARP_BOOKS_PROPS
+                            
+                            if book_key in active_sharps: 
+                                continue
+                                
+                            for out in market['outcomes']:
+                                bet_key = (m_key, out['name'], out.get('description', 'Game'), out.get('point'))
+                                
+                                if bet_key in true_probs:
+                                    true_p = true_probs[bet_key]
                                     soft_odds = out['price']
+                                    ev_pct = calculate_ev(true_p, soft_odds)
                                     
-                                    if team in fair_probs:
-                                        true_prob = fair_probs[team]
-                                        ev_pct = calculate_ev(true_prob, soft_odds)
+                                    if ev_range[0] <= ev_pct <= ev_range[1]:
+                                        stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
+                                        no_vig_american = decimal_to_american(1.0 / true_p)
                                         
-                                        if ev_range[0] <= ev_pct <= ev_range[1]:
-                                            stake = calculate_kelly(true_prob, soft_odds, kelly_fraction, bankroll)
-                                            no_vig_american = decimal_to_american(1.0 / true_prob)
+                                        market_display = m_key.replace('_', ' ').title()
+                                        selection_str = out['name']
+                                        if out.get('description') and out.get('description') != 'Game':
+                                            selection_str = f"{out['description']} {selection_str}"
+                                        if out.get('point') is not None:
+                                            pt = out['point']
+                                            pt_str = f"+{pt}" if pt > 0 and m_key == 'spreads' else str(pt)
+                                            selection_str += f" ({pt_str})"
                                             
-                                            ev_opportunities.append({
-                                                "Sport": sport.upper().replace("_", " "),
-                                                "Matchup": matchup,
-                                                "Selection": team,
-                                                "Soft Book": book['title'],
-                                                "Soft Odds": f"{soft_odds:+d}" if soft_odds > 0 else str(soft_odds),
-                                                "Power Fair Odds": f"{no_vig_american:+d}" if no_vig_american > 0 else str(no_vig_american),
-                                                "True Win %": f"{true_prob * 100:.1f}%",
-                                                "Sharp Hold": f"{market_hold_pct:.1f}%",
-                                                "+EV Edge": ev_pct,
-                                                "Rec Stake": f"${stake:.2f}"
-                                            })
+                                        hold_pct = sharp_holds.get(bet_key, 0.0)
+                                        
+                                        ev_opportunities.append({
+                                            "Sport": sport.upper().replace("_", " "),
+                                            "Matchup": matchup,
+                                            "Market": market_display,
+                                            "Selection": selection_str,
+                                            "Soft Book": book['title'],
+                                            "Odds": f"{soft_odds:+d}" if soft_odds > 0 else str(soft_odds),
+                                            "Fair Odds": f"{no_vig_american:+d}" if no_vig_american > 0 else str(no_vig_american),
+                                            "Win %": f"{true_p * 100:.1f}%",
+                                            "Edge": ev_pct,
+                                            "Rec Stake": f"${stake:.2f}"
+                                        })
 
-            # ==============================================================================
-            # 6. RENDER DATAFRAME
-            # ==============================================================================
+            # --- RENDER DATAFRAME ---
             if req_remaining is not None:
-                st.caption(f"Diagnostics: Lightning scan finished. {req_remaining} API credits remaining.")
+                st.caption(f"Diagnostics: Engine finished. {req_remaining} API credits remaining.")
 
             if ev_opportunities:
-                df = pd.DataFrame(ev_opportunities)
-                df = df.sort_values(by="+EV Edge", ascending=False)
+                df = pd.DataFrame(ev_opportunities).drop_duplicates()
+                df = df.sort_values(by="Edge", ascending=False)
                 
                 formatted_df = df.copy()
-                formatted_df['+EV Edge'] = formatted_df['+EV Edge'].apply(lambda x: f"{x:.2f}%")
+                formatted_df['Edge'] = formatted_df['Edge'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"Found {len(df)} edges matching {ev_range[0]}%–{ev_range[1]}% EV.")
+                st.success(f"Found {len(df)} edges matching {ev_range[0]}%–{ev_range[1]}% EV on your target books.")
                 st.dataframe(formatted_df, use_container_width=True, hide_index=True)
             else:
-                st.warning(f"No edges found within {ev_range[0]}%–{ev_range[1]}% EV right now.")
+                st.warning("No edges found on your target books within this EV range right now.")
