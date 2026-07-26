@@ -7,26 +7,35 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # 1. PAGE CONFIGURATION & CONSTANTS
 # ==============================================================================
 st.set_page_config(
-    page_title="Pro +EV Terminal (Mega Scanner)",
-    page_icon="⚡",
+    page_title="Pro +EV Terminal (Omni-Market)",
+    page_icon="🔥",
     layout="wide"
 )
 
-# Your preferred books to bet on (TheScore Bet runs on the ESPN BET / PENN engine in the US)
-MD_BOOKS = ["draftkings", "fanduel", "espnbet"]
+MD_BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "betrivers", "espnbet", "pointsbetus", "fanatics"]
 
-# Sharp benchmark for Main Lines (ML, Spreads, Totals)
+# Split Sharps: Offshore for Main Lines, Sharp Retail for Props/Exotics
 SHARP_BOOKS_MAIN = ["pinnacle", "bookmaker", "circasports", "betonlineag"]
+SHARP_BOOKS_PROPS = ["draftkings", "fanduel", "bovada", "betonlineag"]
 
-# Sharp benchmark for Player Props (Using major market consensus to find edges on DK/FD/ESPN)
-SHARP_BOOKS_PROPS = ["betmgm", "caesars", "betrivers", "bovada", "betonlineag"]
-
-# Map out the exact prop markets The Odds API accepts per sport
+# THE OMNI-MARKET DICTIONARY (Every available market per sport)
 PROP_MARKETS = {
-    "baseball_mlb": "batter_home_runs,pitcher_strikeouts,batter_hits,batter_rbis",
-    "basketball_nba": "player_points,player_rebounds,player_assists,player_threes",
-    "mma_mixed_martial_arts": "", 
-    "tennis": ""
+    "baseball_mlb": (
+        "batter_home_runs,batter_hits,batter_total_bases,batter_rbis,batter_runs_scored,"
+        "batter_hits_runs_rbis,batter_singles,batter_doubles,batter_triples,batter_walks,"
+        "batter_strikeouts,batter_stolen_bases,pitcher_strikeouts,pitcher_hits_allowed,"
+        "pitcher_walks,pitcher_earned_runs,pitcher_outs,"
+        "totals_1st_1_innings,h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings"
+    ),
+    "basketball_nba": (
+        "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals,"
+        "player_turnovers,player_points_rebounds_assists,player_points_rebounds,"
+        "player_points_assists,player_rebounds_assists,"
+        "h2h_q1,h2h_q2,h2h_q3,h2h_q4,h2h_h1,h2h_h2,"
+        "spreads_q1,spreads_h1,totals_q1,totals_h1"
+    ),
+    "mma_mixed_martial_arts": "method_of_victory,round_betting",
+    "tennis": "h2h_s1,spreads_s1"
 }
 
 # ==============================================================================
@@ -84,7 +93,6 @@ def get_active_tennis_tournaments(api_key):
 # 3. PARALLEL API WORKERS
 # ==============================================================================
 def fetch_odds_worker(sport, markets, api_key, session):
-    """Fetches bulk Main Lines (ML, Spreads, Totals) for all events."""
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
     params = {'apiKey': api_key, 'regions': 'us,eu', 'markets': markets, 'oddsFormat': 'american'}
     try:
@@ -95,7 +103,6 @@ def fetch_odds_worker(sport, markets, api_key, session):
     return sport, None, None
 
 def fetch_events_worker(sport, api_key, session):
-    """Fetches event IDs if user ONLY wants props."""
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
     params = {'apiKey': api_key}
     try:
@@ -106,7 +113,6 @@ def fetch_events_worker(sport, api_key, session):
     return sport, [], None
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
-    """Fetches Player Props for a SPECIFIC event."""
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds/"
     params = {'apiKey': api_key, 'regions': 'us,eu', 'markets': prop_markets, 'oddsFormat': 'american'}
     try:
@@ -119,14 +125,13 @@ def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
 # ==============================================================================
 # 4. UI SIDEBAR CONTROLS
 # ==============================================================================
-st.sidebar.title("Terminal Settings")
+st.sidebar.title("Omni-Market Settings")
 api_key = st.sidebar.text_input("The Odds API Key", type="password")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Markets to Scan")
+st.sidebar.subheader("🎯 Scan Modules")
 scan_main = st.sidebar.checkbox("Main Lines (ML, Spreads, Totals)", value=True)
-scan_props = st.sidebar.checkbox("Player Props (⚠️ High API Cost)", value=False)
-st.sidebar.caption("Props require 1 extra API query PER GAME. Watch your quota!")
+scan_props = st.sidebar.checkbox("Props, Exotics & Halves", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
@@ -136,7 +141,7 @@ ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 Location Setup")
-md_filter = st.sidebar.checkbox("Show ONLY Preferred Books (DK, FD, TheScore/ESPN)", value=True)
+md_filter = st.sidebar.checkbox("Show ONLY Maryland Legal Books", value=True)
 
 st.sidebar.markdown("---")
 selected_sports = st.sidebar.multiselect(
@@ -148,15 +153,15 @@ selected_sports = st.sidebar.multiselect(
 # ==============================================================================
 # 5. EXECUTION & LOGIC
 # ==============================================================================
-st.title("⚡ Multi-Market Consensus Scanner")
+st.title("🔥 Omni-Market Consensus Scanner")
 
-if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=True):
+if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
     if not api_key:
         st.error("API Key required.")
     elif not scan_main and not scan_props:
-        st.warning("Please select at least one market type to scan (Main Lines or Props).")
+        st.warning("Select at least one market type to scan.")
     else:
-        with st.spinner("Firing multi-threaded network requests..."):
+        with st.spinner("Executing Deep Data Pull across all markets..."):
             
             sports_to_scan = []
             for sport in selected_sports:
@@ -171,7 +176,7 @@ if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=
             session = requests.Session()
             raw_results = []
             
-            # --- PHASE 1: Main Lines (Bulk Fetch) ---
+            # --- PHASE 1: Main Lines ---
             if scan_main:
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     futures = [executor.submit(fetch_odds_worker, sport, "h2h,spreads,totals", api_key, session) for sport in sports_to_scan]
@@ -184,7 +189,7 @@ if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=
                                     event_ids_by_sport[sport].append(event['id'])
                         if remaining: req_remaining = remaining
 
-            # --- PHASE 2: Player Props (Per-Event Fetch) ---
+            # --- PHASE 2: Props & Exotics ---
             if scan_props:
                 if not scan_main:
                     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -210,7 +215,7 @@ if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=
                             raw_results.append((sport, data))
                         if remaining: req_remaining = remaining
 
-            # --- PHASE 3: Dynamic Devig Engine ---
+            # --- PHASE 3: Universal Devig Engine ---
             for sport, data in raw_results:
                 for event in data:
                     matchup = f"{event.get('away_team')} @ {event.get('home_team')}"
@@ -219,11 +224,10 @@ if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=
                     true_probs_accum = {}
                     sharp_holds = {}
                     
-                    # 3A. Dynamic Sharp Consensus (Main vs. Props)
+                    # 3A. Dynamic Sharp Consensus
                     for book_key, book in bookies.items():
                         for market in book.get('markets', []):
                             m_key = market['key']
-                            
                             is_main_line = m_key in ['h2h', 'spreads', 'totals']
                             active_sharps = SHARP_BOOKS_MAIN if is_main_line else SHARP_BOOKS_PROPS
                             
@@ -262,7 +266,7 @@ if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=
                     if not true_probs_accum: continue
                     true_probs = {k: sum(v)/len(v) for k, v in true_probs_accum.items()}
                     
-                    # 3B. Target Book Hunting (DK, FD, TheScore/ESPN)
+                    # 3B. Soft Book Hunting
                     for book_key, book in bookies.items():
                         if md_filter and book_key not in MD_BOOKS: 
                             continue
@@ -293,7 +297,7 @@ if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=
                                             selection_str = f"{out['description']} {selection_str}"
                                         if out.get('point') is not None:
                                             pt = out['point']
-                                            pt_str = f"+{pt}" if pt > 0 and m_key == 'spreads' else str(pt)
+                                            pt_str = f"+{pt}" if pt > 0 and 'spread' in m_key else str(pt)
                                             selection_str += f" ({pt_str})"
                                             
                                         hold_pct = sharp_holds.get(bet_key, 0.0)
@@ -322,7 +326,7 @@ if st.button("⚡ Execute High-Speed Scan", type="primary", use_container_width=
                 formatted_df = df.copy()
                 formatted_df['Edge'] = formatted_df['Edge'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"Found {len(df)} edges matching {ev_range[0]}%–{ev_range[1]}% EV on your target books.")
+                st.success(f"Found {len(df)} total edges across all markets matching {ev_range[0]}%–{ev_range[1]}% EV.")
                 st.dataframe(formatted_df, use_container_width=True, hide_index=True)
             else:
-                st.warning("No edges found on your target books within this EV range right now.")
+                st.warning("No edges found. The market is extremely tight right now.")
