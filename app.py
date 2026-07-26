@@ -12,13 +12,16 @@ st.set_page_config(
     layout="wide"
 )
 
-MD_BOOKS = ["draftkings", "fanduel", "betmgm", "caesars", "betrivers", "espnbet", "pointsbetus", "fanatics"]
+# 1. Your actual funded sportsbooks
+MD_BOOKS = ["draftkings", "fanduel", "espnbet"]
 
-# Split Sharps: Offshore for Main Lines, Sharp Retail for Props/Exotics
-SHARP_BOOKS_MAIN = ["pinnacle", "bookmaker", "circasports", "betonlineag"]
-SHARP_BOOKS_PROPS = ["draftkings", "fanduel", "bovada", "betonlineag"]
+# 2. Strict Sharps for Main Lines (Moneylines, Spreads, Totals)
+SHARP_BOOKS_MAIN = ["pinnacle", "circasports"]
 
-# THE OMNI-MARKET DICTIONARY (Every available market per sport)
+# 3. Necessary Offshore Sharps for Player Props
+SHARP_BOOKS_PROPS = ["bovada", "betonlineag"]
+
+# THE OMNI-MARKET DICTIONARY
 PROP_MARKETS = {
     "baseball_mlb": (
         "batter_home_runs,batter_hits,batter_total_bases,batter_rbis,batter_runs_scored,"
@@ -94,7 +97,8 @@ def get_active_tennis_tournaments(api_key):
 # ==============================================================================
 def fetch_odds_worker(sport, markets, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-    params = {'apiKey': api_key, 'regions': 'us,eu', 'markets': markets, 'oddsFormat': 'american'}
+    # Updated regions parameter below to ensure theScore Bet (us2) odds are fetched
+    params = {'apiKey': api_key, 'regions': 'us,us2,eu', 'markets': markets, 'oddsFormat': 'american'}
     try:
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
@@ -114,7 +118,8 @@ def fetch_events_worker(sport, api_key, session):
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds/"
-    params = {'apiKey': api_key, 'regions': 'us,eu', 'markets': prop_markets, 'oddsFormat': 'american'}
+    # Updated regions parameter below to ensure theScore Bet (us2) odds are fetched
+    params = {'apiKey': api_key, 'regions': 'us,us2,eu', 'markets': prop_markets, 'oddsFormat': 'american'}
     try:
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
@@ -137,11 +142,11 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
 bankroll = st.sidebar.number_input("Total Bankroll ($)", min_value=10.0, value=1000.0, step=100.0)
 kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05)
-ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.0, value=(2.0, 5.0), step=0.1)
+ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.0, value=(2.0, 3.0), step=0.1)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 Location Setup")
-md_filter = st.sidebar.checkbox("Show ONLY Maryland Legal Books", value=True)
+md_filter = st.sidebar.checkbox("Show ONLY My Funded Books", value=True)
 
 st.sidebar.markdown("---")
 selected_sports = st.sidebar.multiselect(
