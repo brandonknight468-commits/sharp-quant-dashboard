@@ -97,7 +97,6 @@ def get_active_tennis_tournaments(api_key):
 # ==============================================================================
 def fetch_odds_worker(sport, markets, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-    # Updated regions parameter below to ensure theScore Bet (us2) odds are fetched
     params = {'apiKey': api_key, 'regions': 'us,us2,eu', 'markets': markets, 'oddsFormat': 'american'}
     try:
         res = session.get(url, params=params, timeout=5)
@@ -118,7 +117,6 @@ def fetch_events_worker(sport, api_key, session):
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds/"
-    # Updated regions parameter below to ensure theScore Bet (us2) odds are fetched
     params = {'apiKey': api_key, 'regions': 'us,us2,eu', 'markets': prop_markets, 'oddsFormat': 'american'}
     try:
         res = session.get(url, params=params, timeout=5)
@@ -291,8 +289,10 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                                     true_p = true_probs[bet_key]
                                     soft_odds = out['price']
                                     ev_pct = calculate_ev(true_p, soft_odds)
+                                    hold_pct = sharp_holds.get(bet_key, 0.0)
                                     
-                                    if ev_range[0] <= ev_pct <= ev_range[1]:
+                                    # STRICT SWEET SPOT FILTERING: Edge in Target Range & Sharp Hold <= 4.0%
+                                    if (ev_range[0] <= ev_pct <= ev_range[1]) and (hold_pct <= 4.0):
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
                                         no_vig_american = decimal_to_american(1.0 / true_p)
                                         
@@ -305,8 +305,6 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                                             pt_str = f"+{pt}" if pt > 0 and 'spread' in m_key else str(pt)
                                             selection_str += f" ({pt_str})"
                                             
-                                        hold_pct = sharp_holds.get(bet_key, 0.0)
-                                        
                                         ev_opportunities.append({
                                             "Sport": sport.upper().replace("_", " "),
                                             "Matchup": matchup,
@@ -317,6 +315,7 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                                             "Fair Odds": f"{no_vig_american:+d}" if no_vig_american > 0 else str(no_vig_american),
                                             "Win %": f"{true_p * 100:.1f}%",
                                             "Edge": ev_pct,
+                                            "Sharp Hold": hold_pct,
                                             "Rec Stake": f"${stake:.2f}"
                                         })
 
@@ -330,8 +329,9 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                 
                 formatted_df = df.copy()
                 formatted_df['Edge'] = formatted_df['Edge'].apply(lambda x: f"{x:.2f}%")
+                formatted_df['Sharp Hold'] = formatted_df['Sharp Hold'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"Found {len(df)} total edges across all markets matching {ev_range[0]}%–{ev_range[1]}% EV.")
+                st.success(f"Found {len(df)} sweet-spot plays ({ev_range[0]}%–{ev_range[1]}% EV & Sharp Hold ≤ 4.0%).")
                 st.dataframe(formatted_df, use_container_width=True, hide_index=True)
             else:
-                st.warning("No edges found. The market is extremely tight right now.")
+                st.warning("No plays found meeting your sweet-spot criteria right now.")
