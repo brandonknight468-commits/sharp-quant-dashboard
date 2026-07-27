@@ -93,7 +93,7 @@ def get_active_tennis_tournaments(api_key):
     return []
 
 # ==============================================================================
-# 3. PARALLEL API WORKERS
+# 3. PARALLEL API WORKERS (WITH ERROR LOGGING)
 # ==============================================================================
 def fetch_odds_worker(sport, markets, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
@@ -102,7 +102,10 @@ def fetch_odds_worker(sport, markets, api_key, session):
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
             return sport, res.json(), res.headers.get('x-requests-remaining')
-    except: pass
+        else:
+            print(f"[API ERROR - MAIN LINES] Sport: {sport} | Code: {res.status_code} | Msg: {res.text}")
+    except Exception as e: 
+        print(f"[FETCH ERROR] {e}")
     return sport, None, None
 
 def fetch_events_worker(sport, api_key, session):
@@ -112,7 +115,10 @@ def fetch_events_worker(sport, api_key, session):
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
             return sport, res.json(), res.headers.get('x-requests-remaining')
-    except: pass
+        else:
+            print(f"[API ERROR - EVENTS] Sport: {sport} | Code: {res.status_code} | Msg: {res.text}")
+    except Exception as e: 
+        print(f"[FETCH ERROR] {e}")
     return sport, [], None
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
@@ -122,7 +128,10 @@ def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
             return sport, [res.json()], res.headers.get('x-requests-remaining')
-    except: pass
+        else:
+            print(f"[API ERROR - PROPS] Event: {event_id} | Code: {res.status_code} | Msg: {res.text}")
+    except Exception as e: 
+        print(f"[FETCH ERROR] {e}")
     return sport, None, None
 
 # ==============================================================================
@@ -140,7 +149,10 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
 bankroll = st.sidebar.number_input("Total Bankroll ($)", min_value=10.0, value=1000.0, step=100.0)
 kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05)
+
+# THE NEW FILTERS:
 ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.0, value=(2.0, 3.0), step=0.1)
+max_sharp_hold = st.sidebar.slider("Max Sharp Hold (%)", min_value=1.0, max_value=15.0, value=7.5, step=0.5)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 Location Setup")
@@ -207,7 +219,13 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                 prop_futures = []
                 with ThreadPoolExecutor(max_workers=15) as executor:
                     for sport, e_ids in event_ids_by_sport.items():
-                        p_markets = PROP_MARKETS.get(sport, "")
+                        
+                        # THE TENNIS FIX
+                        if "tennis" in sport:
+                            p_markets = PROP_MARKETS.get("tennis", "")
+                        else:
+                            p_markets = PROP_MARKETS.get(sport, "")
+                            
                         if p_markets:
                             for e_id in e_ids:
                                 prop_futures.append(executor.submit(fetch_props_worker, sport, e_id, p_markets, api_key, session))
@@ -291,8 +309,8 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                                     ev_pct = calculate_ev(true_p, soft_odds)
                                     hold_pct = sharp_holds.get(bet_key, 0.0)
                                     
-                                    # STRICT SWEET SPOT FILTERING: Edge in Target Range & Sharp Hold <= 4.0%
-                                    if (ev_range[0] <= ev_pct <= ev_range[1]) and (hold_pct <= 4.0):
+                                    # THE FIX: Now using the adjustable max_sharp_hold
+                                    if (ev_range[0] <= ev_pct <= ev_range[1]) and (hold_pct <= max_sharp_hold):
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
                                         no_vig_american = decimal_to_american(1.0 / true_p)
                                         
@@ -331,7 +349,7 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                 formatted_df['Edge'] = formatted_df['Edge'].apply(lambda x: f"{x:.2f}%")
                 formatted_df['Sharp Hold'] = formatted_df['Sharp Hold'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"Found {len(df)} sweet-spot plays ({ev_range[0]}%–{ev_range[1]}% EV & Sharp Hold ≤ 4.0%).")
+                st.success(f"Found {len(df)} sweet-spot plays ({ev_range[0]}%–{ev_range[1]}% EV & Sharp Hold ≤ {max_sharp_hold}%).")
                 st.dataframe(formatted_df, use_container_width=True, hide_index=True)
             else:
                 st.warning("No plays found meeting your sweet-spot criteria right now.")
