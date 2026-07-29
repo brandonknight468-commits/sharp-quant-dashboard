@@ -7,36 +7,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # 1. PAGE CONFIGURATION & CONSTANTS
 # ==============================================================================
 st.set_page_config(
-    page_title="Pro +EV Terminal (Omni-Market)",
-    page_icon="🔥",
+    page_title="OMEGA God Mode Sniper (Props & Halves)",
+    page_icon="🎯",
     layout="wide"
 )
 
-# 1. Your actual funded sportsbooks
-MD_BOOKS = ["draftkings", "fanduel", "espnbet"]
+MD_BOOKS = ["draftkings", "fanduel", "espnbet", "betmgm", "caesars"]
+SHARP_BOOKS_PROPS = ["bovada", "betonlineag", "pinnacle"]
 
-# 2. Strict Sharps for Main Lines (Moneylines, Spreads, Totals)
-SHARP_BOOKS_MAIN = ["pinnacle", "circasports"]
-
-# 3. Necessary Offshore Sharps for Player Props
-SHARP_BOOKS_PROPS = ["bovada", "betonlineag"]
-
-# THE OMNI-MARKET DICTIONARY
+# Focused STRICTLY on Props, Exotics, and Halves
 PROP_MARKETS = {
-    "baseball_mlb": (
-        "batter_home_runs,batter_hits,batter_total_bases,batter_rbis,batter_runs_scored,"
-        "batter_hits_runs_rbis,batter_singles,batter_doubles,batter_triples,batter_walks,"
-        "batter_strikeouts,batter_stolen_bases,pitcher_strikeouts,pitcher_hits_allowed,"
-        "pitcher_walks,pitcher_earned_runs,pitcher_outs,"
-        "totals_1st_1_innings,h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings"
-    ),
-    "basketball_nba": (
-        "player_points,player_rebounds,player_assists,player_threes,player_blocks,player_steals,"
-        "player_turnovers,player_points_rebounds_assists,player_points_rebounds,"
-        "player_points_assists,player_rebounds_assists,"
-        "h2h_q1,h2h_q2,h2h_q3,h2h_q4,h2h_h1,h2h_h2,"
-        "spreads_q1,spreads_h1,totals_q1,totals_h1"
-    ),
+    "baseball_mlb": "batter_home_runs,batter_strikeouts,pitcher_strikeouts,h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
+    "basketball_nba": "player_points,player_rebounds,player_assists,player_threes,h2h_q1,h2h_h1,spreads_h1,totals_h1",
     "mma_mixed_martial_arts": "method_of_victory,round_betting",
     "tennis": "h2h_s1,spreads_s1"
 }
@@ -57,6 +39,7 @@ def decimal_to_american(dec):
         return int(round(-100 / (dec - 1.0)))
     return 0
 
+# The Power Devig method is mathematically optimal for props to remove the favorite-longshot bias
 def devig_power(implied_a, implied_b):
     total_implied = implied_a + implied_b
     if total_implied <= 1.0:
@@ -93,21 +76,34 @@ def get_active_tennis_tournaments(api_key):
     return []
 
 # ==============================================================================
-# 3. PARALLEL API WORKERS (WITH ERROR LOGGING)
+# 3. TIER CLASSIFICATION & STYLING
 # ==============================================================================
-def fetch_odds_worker(sport, markets, api_key, session):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport}/odds/"
-    params = {'apiKey': api_key, 'regions': 'us,us2,eu', 'markets': markets, 'oddsFormat': 'american'}
-    try:
-        res = session.get(url, params=params, timeout=5)
-        if res.status_code == 200:
-            return sport, res.json(), res.headers.get('x-requests-remaining')
-        else:
-            print(f"[API ERROR - MAIN LINES] Sport: {sport} | Code: {res.status_code} | Msg: {res.text}")
-    except Exception as e: 
-        print(f"[FETCH ERROR] {e}")
-    return sport, None, None
+def get_tier(ev, hold):
+    # OMEGA: Insane value (EV >= 4.5%) combined with extreme sharp confidence (Hold <= 5.5%)
+    if hold <= 5.5 and ev >= 4.5:
+        return '🟢 OMEGA TIER'
+    # ELITE: Strong value (EV >= 3.0%) with highly confident sharps (Hold <= 6.5%)
+    elif hold <= 6.5 and ev >= 3.0:
+        return '🟡 ELITE TIER'
+    # VALUE: Minimum acceptable threshold for taking a prop/half
+    elif hold <= 7.0 and ev >= 2.0:
+        return '🔵 VALUE TIER'
+    return None # Trash plays return None and get filtered out
 
+def style_dataframe(df):
+    def highlight_rows(row):
+        if row['Tier'] == '🟢 OMEGA TIER':
+            return ['background-color: rgba(0, 255, 0, 0.15)'] * len(row)
+        elif row['Tier'] == '🟡 ELITE TIER':
+            return ['background-color: rgba(255, 215, 0, 0.15)'] * len(row)
+        elif row['Tier'] == '🔵 VALUE TIER':
+            return ['background-color: rgba(0, 191, 255, 0.15)'] * len(row)
+        return [''] * len(row)
+    return df.style.apply(highlight_rows, axis=1)
+
+# ==============================================================================
+# 4. PARALLEL API WORKERS 
+# ==============================================================================
 def fetch_events_worker(sport, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
     params = {'apiKey': api_key}
@@ -135,24 +131,15 @@ def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
     return sport, None, None
 
 # ==============================================================================
-# 4. UI SIDEBAR CONTROLS
+# 5. UI SIDEBAR CONTROLS
 # ==============================================================================
-st.sidebar.title("Omni-Market Settings")
+st.sidebar.title("🎯 God Mode Settings")
 api_key = st.sidebar.text_input("The Odds API Key", type="password")
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("🎯 Scan Modules")
-scan_main = st.sidebar.checkbox("Main Lines (ML, Spreads, Totals)", value=True)
-scan_props = st.sidebar.checkbox("Props, Exotics & Halves", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
 bankroll = st.sidebar.number_input("Total Bankroll ($)", min_value=10.0, value=1000.0, step=100.0)
-kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05)
-
-# THE NEW FILTERS:
-ev_range = st.sidebar.slider("Target EV Range (%)", min_value=0.0, max_value=10.0, value=(2.0, 3.0), step=0.1)
-max_sharp_hold = st.sidebar.slider("Max Sharp Hold (%)", min_value=1.0, max_value=15.0, value=7.5, step=0.5)
+kelly_fraction = st.sidebar.slider("Kelly Multiplier (Keep it low for variance)", 0.1, 1.0, 0.25, 0.05)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 Location Setup")
@@ -162,21 +149,20 @@ st.sidebar.markdown("---")
 selected_sports = st.sidebar.multiselect(
     "Select Sports",
     options=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"],
-    default=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"]
+    default=["baseball_mlb", "tennis"] 
 )
 
 # ==============================================================================
-# 5. EXECUTION & LOGIC
+# 6. EXECUTION & LOGIC
 # ==============================================================================
-st.title("🔥 Omni-Market Consensus Scanner")
+st.title("🎯 OMEGA Tier Sniper (Strict Props & Halves)")
+st.markdown("This model strictly filters out the noise. If the sharp books are guessing, we don't bet. Only highly confident edges are shown.")
 
-if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
+if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=True):
     if not api_key:
         st.error("API Key required.")
-    elif not scan_main and not scan_props:
-        st.warning("Select at least one market type to scan.")
     else:
-        with st.spinner("Executing Deep Data Pull across all markets..."):
+        with st.spinner("Locking on to strict value props..."):
             
             sports_to_scan = []
             for sport in selected_sports:
@@ -191,52 +177,34 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
             session = requests.Session()
             raw_results = []
             
-            # --- PHASE 1: Main Lines ---
-            if scan_main:
-                with ThreadPoolExecutor(max_workers=10) as executor:
-                    futures = [executor.submit(fetch_odds_worker, sport, "h2h,spreads,totals", api_key, session) for sport in sports_to_scan]
-                    for future in as_completed(futures):
-                        sport, data, remaining = future.result()
-                        if data:
-                            raw_results.append((sport, data))
-                            for event in data:
-                                if event['id'] not in event_ids_by_sport[sport]:
-                                    event_ids_by_sport[sport].append(event['id'])
-                        if remaining: req_remaining = remaining
+            # PHASE 1: GET EVENTS
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(fetch_events_worker, sport, api_key, session) for sport in sports_to_scan]
+                for future in as_completed(futures):
+                    sport, events_data, remaining = future.result()
+                    if events_data:
+                        for event in events_data:
+                            event_ids_by_sport[sport].append(event['id'])
+                    if remaining: req_remaining = remaining
 
-            # --- PHASE 2: Props & Exotics ---
-            if scan_props:
-                if not scan_main:
-                    with ThreadPoolExecutor(max_workers=10) as executor:
-                        futures = [executor.submit(fetch_events_worker, sport, api_key, session) for sport in sports_to_scan]
-                        for future in as_completed(futures):
-                            sport, events_data, remaining = future.result()
-                            if events_data:
-                                for event in events_data:
-                                    event_ids_by_sport[sport].append(event['id'])
-                            if remaining: req_remaining = remaining
-
-                prop_futures = []
-                with ThreadPoolExecutor(max_workers=15) as executor:
-                    for sport, e_ids in event_ids_by_sport.items():
+            # PHASE 2: GET PROPS & HALVES
+            prop_futures = []
+            with ThreadPoolExecutor(max_workers=15) as executor:
+                for sport, e_ids in event_ids_by_sport.items():
+                    dict_key = "tennis" if "tennis" in sport else sport
+                    p_markets = PROP_MARKETS.get(dict_key, "")
                         
-                        # THE TENNIS FIX
-                        if "tennis" in sport:
-                            p_markets = PROP_MARKETS.get("tennis", "")
-                        else:
-                            p_markets = PROP_MARKETS.get(sport, "")
-                            
-                        if p_markets:
-                            for e_id in e_ids:
-                                prop_futures.append(executor.submit(fetch_props_worker, sport, e_id, p_markets, api_key, session))
-                    
-                    for future in as_completed(prop_futures):
-                        sport, data, remaining = future.result()
-                        if data:
-                            raw_results.append((sport, data))
-                        if remaining: req_remaining = remaining
+                    if p_markets:
+                        for e_id in e_ids:
+                            prop_futures.append(executor.submit(fetch_props_worker, sport, e_id, p_markets, api_key, session))
+                
+                for future in as_completed(prop_futures):
+                    sport, data, remaining = future.result()
+                    if data:
+                        raw_results.append((sport, data))
+                    if remaining: req_remaining = remaining
 
-            # --- PHASE 3: Universal Devig Engine ---
+            # PHASE 3: THE SNIPER ENGINE
             for sport, data in raw_results:
                 for event in data:
                     matchup = f"{event.get('away_team')} @ {event.get('home_team')}"
@@ -245,15 +213,13 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                     true_probs_accum = {}
                     sharp_holds = {}
                     
-                    # 3A. Dynamic Sharp Consensus
+                    # 3A. Extract Sharp Baselines
                     for book_key, book in bookies.items():
+                        if book_key not in SHARP_BOOKS_PROPS: 
+                            continue
+                            
                         for market in book.get('markets', []):
                             m_key = market['key']
-                            is_main_line = m_key in ['h2h', 'spreads', 'totals']
-                            active_sharps = SHARP_BOOKS_MAIN if is_main_line else SHARP_BOOKS_PROPS
-                            
-                            if book_key not in active_sharps: 
-                                continue
                             
                             groups = {}
                             for out in market['outcomes']:
@@ -271,6 +237,7 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                                     except: continue
                                         
                                     market_hold_pct = (implied_a + implied_b - 1.0) * 100
+                                    
                                     fair_a, fair_b = devig_power(implied_a, implied_b)
                                     
                                     b_key_a = (m_key, outs[0]['name'], outs[0].get('description', 'Game'), outs[0].get('point'))
@@ -287,18 +254,15 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                     if not true_probs_accum: continue
                     true_probs = {k: sum(v)/len(v) for k, v in true_probs_accum.items()}
                     
-                    # 3B. Soft Book Hunting
+                    # 3B. Hunt for God Tier Value
                     for book_key, book in bookies.items():
                         if md_filter and book_key not in MD_BOOKS: 
                             continue
-                            
+                        if book_key in SHARP_BOOKS_PROPS: 
+                            continue
+                                
                         for market in book.get('markets', []):
                             m_key = market['key']
-                            is_main_line = m_key in ['h2h', 'spreads', 'totals']
-                            active_sharps = SHARP_BOOKS_MAIN if is_main_line else SHARP_BOOKS_PROPS
-                            
-                            if book_key in active_sharps: 
-                                continue
                                 
                             for out in market['outcomes']:
                                 bet_key = (m_key, out['name'], out.get('description', 'Game'), out.get('point'))
@@ -307,12 +271,12 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                                     true_p = true_probs[bet_key]
                                     soft_odds = out['price']
                                     ev_pct = calculate_ev(true_p, soft_odds)
-                                    hold_pct = sharp_holds.get(bet_key, 0.0)
+                                    hold_pct = sharp_holds.get(bet_key, 100.0)
                                     
-                                    # THE FIX: Now using the adjustable max_sharp_hold
-                                    if (ev_range[0] <= ev_pct <= ev_range[1]) and (hold_pct <= max_sharp_hold):
+                                    # STRICT TIER SYSTEM FILTER (Anything worse than VALUE TIER is rejected)
+                                    tier = get_tier(ev_pct, hold_pct)
+                                    if tier:
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
-                                        no_vig_american = decimal_to_american(1.0 / true_p)
                                         
                                         market_display = m_key.replace('_', ' ').title()
                                         selection_str = out['name']
@@ -324,32 +288,36 @@ if st.button("⚡ Execute Deep Scan", type="primary", use_container_width=True):
                                             selection_str += f" ({pt_str})"
                                             
                                         ev_opportunities.append({
-                                            "Sport": sport.upper().replace("_", " "),
+                                            "Tier": tier,
                                             "Matchup": matchup,
                                             "Market": market_display,
                                             "Selection": selection_str,
-                                            "Soft Book": book['title'],
+                                            "Soft Book": book['title'].upper(),
                                             "Odds": f"{soft_odds:+d}" if soft_odds > 0 else str(soft_odds),
-                                            "Fair Odds": f"{no_vig_american:+d}" if no_vig_american > 0 else str(no_vig_american),
-                                            "Win %": f"{true_p * 100:.1f}%",
                                             "Edge": ev_pct,
                                             "Sharp Hold": hold_pct,
                                             "Rec Stake": f"${stake:.2f}"
                                         })
 
-            # --- RENDER DATAFRAME ---
+            # --- RENDER OMEGA DATAFRAME ---
             if req_remaining is not None:
                 st.caption(f"Diagnostics: Engine finished. {req_remaining} API credits remaining.")
 
             if ev_opportunities:
                 df = pd.DataFrame(ev_opportunities).drop_duplicates()
-                df = df.sort_values(by="Edge", ascending=False)
                 
-                formatted_df = df.copy()
-                formatted_df['Edge'] = formatted_df['Edge'].apply(lambda x: f"{x:.2f}%")
-                formatted_df['Sharp Hold'] = formatted_df['Sharp Hold'].apply(lambda x: f"{x:.2f}%")
+                # Sort by tier priority then by edge
+                tier_order = {'🟢 OMEGA TIER': 0, '🟡 ELITE TIER': 1, '🔵 VALUE TIER': 2}
+                df['TierRank'] = df['Tier'].map(tier_order)
+                df = df.sort_values(by=["TierRank", "Edge"], ascending=[True, False]).drop(columns=['TierRank'])
                 
-                st.success(f"Found {len(df)} sweet-spot plays ({ev_range[0]}%–{ev_range[1]}% EV & Sharp Hold ≤ {max_sharp_hold}%).")
-                st.dataframe(formatted_df, use_container_width=True, hide_index=True)
+                # Format for display
+                df['Edge'] = df['Edge'].apply(lambda x: f"{x:.2f}%")
+                df['Sharp Hold'] = df['Sharp Hold'].apply(lambda x: f"{x:.2f}%")
+                
+                st.success(f"Sniper locked on. Found {len(df)} heavily vetted plays.")
+                
+                # Apply the god mode color styling
+                st.dataframe(style_dataframe(df), use_container_width=True, hide_index=True)
             else:
-                st.warning("No plays found meeting your sweet-spot criteria right now.")
+                st.error("No God Tier or Elite plays currently available. The books are tight right now. Save your money and scan later.")
