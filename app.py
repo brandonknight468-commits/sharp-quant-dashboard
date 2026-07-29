@@ -15,12 +15,12 @@ st.set_page_config(
 MD_BOOKS = ["draftkings", "fanduel", "espnbet", "betmgm", "caesars"]
 SHARP_BOOKS_PROPS = ["bovada", "betonlineag", "pinnacle"]
 
-# Focused STRICTLY on Props, Exotics, and Halves
+# Focused STRICTLY on MLB, NBA, NFL, and UFC Props, Exotics, and Halves
 PROP_MARKETS = {
     "baseball_mlb": "batter_home_runs,batter_strikeouts,pitcher_strikeouts,h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
     "basketball_nba": "player_points,player_rebounds,player_assists,player_threes,h2h_q1,h2h_h1,spreads_h1,totals_h1",
-    "mma_mixed_martial_arts": "method_of_victory,round_betting",
-    "tennis": "h2h_s1,spreads_s1"
+    "american_football_nfl": "player_pass_tds,player_pass_yds,player_rush_yds,player_receptions,player_reception_yds,player_anytime_td,h2h_h1,spreads_h1,totals_h1",
+    "mma_mixed_martial_arts": "method_of_victory,round_betting"
 }
 
 # ==============================================================================
@@ -65,15 +65,6 @@ def calculate_kelly(fair_prob, target_odds_american, fraction, bankroll):
     if b <= 0: return 0.0
     f_star = (b * fair_prob - q) / b
     return max(0.0, round(f_star * fraction * bankroll, 2))
-
-@st.cache_data(ttl=60)
-def get_active_tennis_tournaments(api_key):
-    try:
-        res = requests.get("https://api.the-odds-api.com/v4/sports", params={"apiKey": api_key}, timeout=5)
-        if res.status_code == 200:
-            return [sport['key'] for sport in res.json() if 'tennis' in sport.get('key', '')]
-    except: pass
-    return []
 
 # ==============================================================================
 # 3. TIER CLASSIFICATION & STYLING
@@ -148,8 +139,8 @@ md_filter = st.sidebar.checkbox("Show ONLY My Funded Books", value=True)
 st.sidebar.markdown("---")
 selected_sports = st.sidebar.multiselect(
     "Select Sports",
-    options=["baseball_mlb", "basketball_nba", "mma_mixed_martial_arts", "tennis"],
-    default=["baseball_mlb", "tennis"] 
+    options=["baseball_mlb", "basketball_nba", "american_football_nfl", "mma_mixed_martial_arts"],
+    default=["baseball_mlb", "american_football_nfl", "mma_mixed_martial_arts"] 
 )
 
 # ==============================================================================
@@ -164,11 +155,8 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
     else:
         with st.spinner("Locking on to strict value props..."):
             
-            sports_to_scan = []
-            for sport in selected_sports:
-                if sport == "tennis":
-                    sports_to_scan.extend(get_active_tennis_tournaments(api_key))
-                else: sports_to_scan.append(sport)
+            # Since tennis is removed, we just directly map selected sports
+            sports_to_scan = selected_sports
 
             ev_opportunities = []
             req_remaining = None
@@ -191,8 +179,7 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
             prop_futures = []
             with ThreadPoolExecutor(max_workers=15) as executor:
                 for sport, e_ids in event_ids_by_sport.items():
-                    dict_key = "tennis" if "tennis" in sport else sport
-                    p_markets = PROP_MARKETS.get(dict_key, "")
+                    p_markets = PROP_MARKETS.get(sport, "")
                         
                     if p_markets:
                         for e_id in e_ids:
