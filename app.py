@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 # ==============================================================================
 # 1. PAGE CONFIGURATION & CONSTANTS
@@ -110,7 +111,8 @@ def fetch_events_worker(sport, api_key, session):
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds/"
-    params = {'apiKey': api_key, 'regions': 'us,us2,eu', 'markets': prop_markets, 'oddsFormat': 'american'}
+    # Strictly US region to save API credits and speed up execution
+    params = {'apiKey': api_key, 'regions': 'us', 'markets': prop_markets, 'oddsFormat': 'american'}
     try:
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
@@ -146,8 +148,8 @@ selected_sports = st.sidebar.multiselect(
 # ==============================================================================
 # 6. EXECUTION & LOGIC
 # ==============================================================================
-st.title("🎯 OMEGA Tier Sniper (Strict Props & Halves)")
-st.markdown("This model strictly filters out the noise. If the sharp books are guessing, we don't bet. Only highly confident edges are shown.")
+st.title("🎯 OMEGA Tier Sniper (Strict Pre-Game Props & Halves)")
+st.markdown("This model strictly filters out the noise and **blocks live games**. If the sharp books are guessing, or if the game has already started, we don't bet.")
 
 if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=True):
     if not api_key:
@@ -155,9 +157,7 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
     else:
         with st.spinner("Locking on to strict value props..."):
             
-            # Since tennis is removed, we just directly map selected sports
             sports_to_scan = selected_sports
-
             ev_opportunities = []
             req_remaining = None
             event_ids_by_sport = {s: [] for s in sports_to_scan}
@@ -194,6 +194,18 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
             # PHASE 3: THE SNIPER ENGINE
             for sport, data in raw_results:
                 for event in data:
+                    
+                    # ==========================================
+                    # 🛑 THE LIVE GAME KILLSWITCH 🛑
+                    # ==========================================
+                    commence_time = event.get('commence_time')
+                    if commence_time:
+                        game_start = datetime.strptime(commence_time, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                        # If the game start time is in the past, skip it entirely
+                        if game_start < datetime.now(timezone.utc):
+                            continue
+                    # ==========================================
+
                     matchup = f"{event.get('away_team')} @ {event.get('home_team')}"
                     bookies = {b['key']: b for b in event.get('bookmakers', [])}
                     
@@ -260,7 +272,7 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                     ev_pct = calculate_ev(true_p, soft_odds)
                                     hold_pct = sharp_holds.get(bet_key, 100.0)
                                     
-                                    # STRICT TIER SYSTEM FILTER (Anything worse than VALUE TIER is rejected)
+                                    # STRICT TIER SYSTEM FILTER
                                     tier = get_tier(ev_pct, hold_pct)
                                     if tier:
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
@@ -293,18 +305,15 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
             if ev_opportunities:
                 df = pd.DataFrame(ev_opportunities).drop_duplicates()
                 
-                # Sort by tier priority then by edge
                 tier_order = {'🟢 OMEGA TIER': 0, '🟡 ELITE TIER': 1, '🔵 VALUE TIER': 2}
                 df['TierRank'] = df['Tier'].map(tier_order)
                 df = df.sort_values(by=["TierRank", "Edge"], ascending=[True, False]).drop(columns=['TierRank'])
                 
-                # Format for display
                 df['Edge'] = df['Edge'].apply(lambda x: f"{x:.2f}%")
                 df['Sharp Hold'] = df['Sharp Hold'].apply(lambda x: f"{x:.2f}%")
                 
-                st.success(f"Sniper locked on. Found {len(df)} heavily vetted plays.")
+                st.success(f"Sniper locked on. Found {len(df)} heavily vetted pre-game plays.")
                 
-                # Apply the god mode color styling
                 st.dataframe(style_dataframe(df), use_container_width=True, hide_index=True)
             else:
-                st.error("No God Tier or Elite plays currently available. The books are tight right now. Save your money and scan later.")
+                st.error("No God Tier or Elite PRE-GAME plays currently available. The books are tight right now. Save your money and scan later.")
