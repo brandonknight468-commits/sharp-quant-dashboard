@@ -127,7 +127,13 @@ def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
 # 5. UI SIDEBAR CONTROLS
 # ==============================================================================
 st.sidebar.title("🎯 God Mode Settings")
-api_key = st.sidebar.text_input("The Odds API Key", type="password")
+
+# API key locked in by default
+api_key = st.sidebar.text_input(
+    "The Odds API Key", 
+    value="59331ea391b20784a92c2682c3f4b1f6", 
+    type="password"
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
