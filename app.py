@@ -91,7 +91,9 @@ def style_dataframe(df):
         elif row['Tier'] == '🔵 VALUE TIER':
             return ['background-color: rgba(0, 191, 255, 0.15)'] * len(row)
         return [''] * len(row)
-    return df.style.apply(highlight_rows, axis=1)
+    
+    # Safely apply styles and hide the index directly in the Styler
+    return df.style.apply(highlight_rows, axis=1).hide(axis="index")
 
 # ==============================================================================
 # 4. PARALLEL API WORKERS 
@@ -110,8 +112,8 @@ def fetch_events_worker(sport, api_key, session):
     return sport, [], None
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
-    url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds/"
-    # Strictly US region to save API credits and speed up execution
+    # Removed the trailing slash which can cause API connection issues
+    url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
     params = {'apiKey': api_key, 'regions': 'us', 'markets': prop_markets, 'oddsFormat': 'american'}
     try:
         res = session.get(url, params=params, timeout=5)
@@ -128,7 +130,6 @@ def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
 # ==============================================================================
 st.sidebar.title("🎯 God Mode Settings")
 
-# API key locked in by default
 api_key = st.sidebar.text_input(
     "The Odds API Key", 
     value="59331ea391b20784a92c2682c3f4b1f6", 
@@ -168,7 +169,11 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
             req_remaining = None
             event_ids_by_sport = {s: [] for s in sports_to_scan}
             
+            # Mount a custom adapter to allow true parallel processing via ThreadPoolExecutor
             session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
+            session.mount('https://', adapter)
+            
             raw_results = []
             
             # PHASE 1: GET EVENTS
@@ -207,7 +212,6 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                     commence_time = event.get('commence_time')
                     if commence_time:
                         game_start = datetime.strptime(commence_time, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                        # If the game start time is in the past, skip it entirely
                         if game_start < datetime.now(timezone.utc):
                             continue
                     # ==========================================
@@ -278,7 +282,6 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                     ev_pct = calculate_ev(true_p, soft_odds)
                                     hold_pct = sharp_holds.get(bet_key, 100.0)
                                     
-                                    # STRICT TIER SYSTEM FILTER
                                     tier = get_tier(ev_pct, hold_pct)
                                     if tier:
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
@@ -298,7 +301,8 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                             "Market": market_display,
                                             "Selection": selection_str,
                                             "Soft Book": book['title'].upper(),
-                                            "Odds": f"{soft_odds:+d}" if soft_odds > 0 else str(soft_odds),
+                                            # Fixed string conversion of odds to prevent formatting crashes
+                                            "Odds": f"{int(soft_odds):+d}" if soft_odds > 0 else str(int(soft_odds)),
                                             "Edge": ev_pct,
                                             "Sharp Hold": hold_pct,
                                             "Rec Stake": f"${stake:.2f}"
@@ -320,6 +324,7 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                 
                 st.success(f"Sniper locked on. Found {len(df)} heavily vetted pre-game plays.")
                 
-                st.dataframe(style_dataframe(df), use_container_width=True, hide_index=True)
+                # Removed conflicting hide_index kwarg since we native-hid it in the Style function above
+                st.dataframe(style_dataframe(df), use_container_width=True)
             else:
                 st.error("No God Tier or Elite PRE-GAME plays currently available. The books are tight right now. Save your money and scan later.")
