@@ -58,7 +58,7 @@ def calculate_kelly(fair_prob, target_odds_american, fraction, bankroll):
     f_star = (b * fair_prob - q) / b
     return max(0.0, round(f_star * fraction * bankroll, 2))
 
-# NEW FIX: Aggressively match mascots and variations to Home/Away
+# UPGRADED: Strict Mascot & Substring Matching to prevent Team Crossovers
 def standardize_selection(out_name, home_team, away_team):
     name = str(out_name).lower().strip()
     home_lower = home_team.lower()
@@ -69,14 +69,16 @@ def standardize_selection(out_name, home_team, away_team):
     if name == home_lower: return "Home"
     if name == away_lower: return "Away"
     
-    # Mascot matching (e.g., "angels" in "los angeles angels")
+    # Mascot matching (Only executes if mascots are distinct to prevent Sox vs Sox errors)
     home_mascot = home_lower.split()[-1]
     away_mascot = away_lower.split()[-1]
-    if home_mascot in name: return "Home"
-    if away_mascot in name: return "Away"
+    if home_mascot != away_mascot:
+        if home_mascot in name: return "Home"
+        if away_mascot in name: return "Away"
     
-    if name in home_lower and len(name) > 3: return "Home"
-    if name in away_lower and len(name) > 3: return "Away"
+    # Strict substring matches
+    if name in home_lower and name not in away_lower: return "Home"
+    if name in away_lower and name not in home_lower: return "Away"
     
     return out_name
 
@@ -128,7 +130,7 @@ api_key = st.sidebar.text_input("The Odds API Key", value="59331ea391b20784a92c2
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
 bankroll = st.sidebar.number_input("Total Bankroll ($)", min_value=10.0, value=1000.0, step=100.0)
-kelly_fraction = st.sidebar.slider("Kelly Multiplier (Keep it low for variance)", 0.1, 1.0, 0.25, 0.05)
+kelly_fraction = st.sidebar.slider("Kelly Multiplier", 0.1, 1.0, 0.25, 0.05)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 Location Setup")
@@ -145,7 +147,7 @@ selected_sports = st.sidebar.multiselect(
 # 6. EXECUTION & LOGIC
 # ==============================================================================
 st.title("🎯 OMEGA Tier Sniper (Strict Pre-Game Props & Halves)")
-st.markdown("This model strictly filters out the noise and **blocks live games**.")
+st.markdown("This model filters noise, blocks live games, and kills API Ghost Lines.")
 
 if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=True):
     if not api_key: st.error("API Key required.")
@@ -224,9 +226,10 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                         
                                     fair_a, fair_b = devig_power(implied_a, implied_b)
                                     
-                                    # Translate Names to Home/Away
                                     std_name_a = standardize_selection(outs[0]['name'], home_team, away_team)
                                     std_name_b = standardize_selection(outs[1]['name'], home_team, away_team)
+                                    
+                                    if std_name_a == std_name_b: continue # Skip failed standardizations
                                     
                                     b_key_a = (m_key, std_name_a, outs[0].get('description', 'Game'), outs[0].get('point'))
                                     b_key_b = (m_key, std_name_b, outs[1].get('description', 'Game'), outs[1].get('point'))
@@ -256,13 +259,19 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                 if bet_key in true_probs:
                                     true_p = true_probs[bet_key]
                                     soft_odds = out['price']
-                                    ev_pct = calculate_ev(true_p, soft_odds)
                                     
+                                    # 🛑 GHOST LINE GUARDRAIL
+                                    # Kills API errors where the soft book odds were flipped relative to true probabilities.
+                                    soft_implied = 1.0 / american_to_decimal(soft_odds)
+                                    if abs(true_p - soft_implied) > 0.12:
+                                        continue 
+                                    
+                                    ev_pct = calculate_ev(true_p, soft_odds)
                                     tier = get_tier(ev_pct, sharp_holds.get(bet_key, 100.0))
+                                    
                                     if tier:
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
                                         
-                                        # Format the selection name for the UI cleanly
                                         display_sel = out['name']
                                         if std_name == "Home": display_sel = home_team
                                         elif std_name == "Away": display_sel = away_team
