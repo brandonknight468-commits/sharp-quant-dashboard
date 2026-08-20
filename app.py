@@ -32,13 +32,6 @@ def american_to_decimal(american):
     else:
         return (100.0 / abs(american)) + 1.0
 
-def decimal_to_american(dec):
-    if dec >= 2.0:
-        return int(round((dec - 1.0) * 100))
-    elif dec > 1.0:
-        return int(round(-100 / (dec - 1.0)))
-    return 0
-
 def devig_power(implied_a, implied_b):
     total_implied = implied_a + implied_b
     if total_implied <= 1.0:
@@ -65,37 +58,43 @@ def calculate_kelly(fair_prob, target_odds_american, fraction, bankroll):
     f_star = (b * fair_prob - q) / b
     return max(0.0, round(f_star * fraction * bankroll, 2))
 
-# Normalizes 'Home'/'Away' outcomes to actual team names for consistent matching
-def get_clean_outcome_name(out, home_team, away_team):
-    name = out.get('name', '')
-    if name.lower() in ['home', 'h']:
-        return home_team
-    elif name.lower() in ['away', 'a', 'v']:
-        return away_team
-    return name
+# NEW FIX: Aggressively match mascots and variations to Home/Away
+def standardize_selection(out_name, home_team, away_team):
+    name = str(out_name).lower().strip()
+    home_lower = home_team.lower()
+    away_lower = away_team.lower()
+    
+    if name in ['home', 'h', 'home team']: return "Home"
+    if name in ['away', 'a', 'v', 'away team', 'visitor']: return "Away"
+    if name == home_lower: return "Home"
+    if name == away_lower: return "Away"
+    
+    # Mascot matching (e.g., "angels" in "los angeles angels")
+    home_mascot = home_lower.split()[-1]
+    away_mascot = away_lower.split()[-1]
+    if home_mascot in name: return "Home"
+    if away_mascot in name: return "Away"
+    
+    if name in home_lower and len(name) > 3: return "Home"
+    if name in away_lower and len(name) > 3: return "Away"
+    
+    return out_name
 
 # ==============================================================================
 # 3. TIER CLASSIFICATION & STYLING
 # ==============================================================================
 def get_tier(ev, hold):
-    if hold <= 5.5 and ev >= 4.5:
-        return '🟢 OMEGA TIER'
-    elif hold <= 6.5 and ev >= 3.0:
-        return '🟡 ELITE TIER'
-    elif hold <= 7.0 and ev >= 2.0:
-        return '🔵 VALUE TIER'
+    if hold <= 5.5 and ev >= 4.5: return '🟢 OMEGA TIER'
+    elif hold <= 6.5 and ev >= 3.0: return '🟡 ELITE TIER'
+    elif hold <= 7.0 and ev >= 2.0: return '🔵 VALUE TIER'
     return None 
 
 def style_dataframe(df):
     def highlight_rows(row):
-        if row['Tier'] == '🟢 OMEGA TIER':
-            return ['background-color: rgba(0, 255, 0, 0.15)'] * len(row)
-        elif row['Tier'] == '🟡 ELITE TIER':
-            return ['background-color: rgba(255, 215, 0, 0.15)'] * len(row)
-        elif row['Tier'] == '🔵 VALUE TIER':
-            return ['background-color: rgba(0, 191, 255, 0.15)'] * len(row)
+        if row['Tier'] == '🟢 OMEGA TIER': return ['background-color: rgba(0, 255, 0, 0.15)'] * len(row)
+        elif row['Tier'] == '🟡 ELITE TIER': return ['background-color: rgba(255, 215, 0, 0.15)'] * len(row)
+        elif row['Tier'] == '🔵 VALUE TIER': return ['background-color: rgba(0, 191, 255, 0.15)'] * len(row)
         return [''] * len(row)
-    
     return df.style.apply(highlight_rows, axis=1).hide(axis="index")
 
 # ==============================================================================
@@ -103,15 +102,11 @@ def style_dataframe(df):
 # ==============================================================================
 def fetch_events_worker(sport, api_key, session):
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events"
-    params = {'apiKey': api_key}
     try:
-        res = session.get(url, params=params, timeout=5)
+        res = session.get(url, params={'apiKey': api_key}, timeout=5)
         if res.status_code == 200:
             return sport, res.json(), res.headers.get('x-requests-remaining')
-        else:
-            print(f"[API ERROR - EVENTS] Sport: {sport} | Code: {res.status_code} | Msg: {res.text}")
-    except Exception as e: 
-        print(f"[FETCH ERROR] {e}")
+    except: pass
     return sport, [], None
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
@@ -121,22 +116,14 @@ def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
         res = session.get(url, params=params, timeout=5)
         if res.status_code == 200:
             return sport, [res.json()], res.headers.get('x-requests-remaining')
-        else:
-            print(f"[API ERROR - PROPS] Event: {event_id} | Code: {res.status_code} | Msg: {res.text}")
-    except Exception as e: 
-        print(f"[FETCH ERROR] {e}")
+    except: pass
     return sport, None, None
 
 # ==============================================================================
 # 5. UI SIDEBAR CONTROLS
 # ==============================================================================
 st.sidebar.title("🎯 God Mode Settings")
-
-api_key = st.sidebar.text_input(
-    "The Odds API Key", 
-    value="59331ea391b20784a92c2682c3f4b1f6", 
-    type="password"
-)
+api_key = st.sidebar.text_input("The Odds API Key", value="59331ea391b20784a92c2682c3f4b1f6", type="password")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
@@ -158,28 +145,23 @@ selected_sports = st.sidebar.multiselect(
 # 6. EXECUTION & LOGIC
 # ==============================================================================
 st.title("🎯 OMEGA Tier Sniper (Strict Pre-Game Props & Halves)")
-st.markdown("This model strictly filters out the noise and **blocks live games**. If the sharp books are guessing, or if the game has already started, we don't bet.")
+st.markdown("This model strictly filters out the noise and **blocks live games**.")
 
 if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=True):
-    if not api_key:
-        st.error("API Key required.")
+    if not api_key: st.error("API Key required.")
     else:
         with st.spinner("Locking on to strict value props..."):
             
-            sports_to_scan = selected_sports
             ev_opportunities = []
             req_remaining = None
-            event_ids_by_sport = {s: [] for s in sports_to_scan}
-            
+            event_ids_by_sport = {s: [] for s in selected_sports}
             session = requests.Session()
-            adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
-            session.mount('https://', adapter)
-            
+            session.mount('https://', requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20))
             raw_results = []
             
             # PHASE 1: GET EVENTS
             with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = [executor.submit(fetch_events_worker, sport, api_key, session) for sport in sports_to_scan]
+                futures = [executor.submit(fetch_events_worker, sport, api_key, session) for sport in selected_sports]
                 for future in as_completed(futures):
                     sport, events_data, remaining = future.result()
                     if events_data:
@@ -192,27 +174,24 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
             with ThreadPoolExecutor(max_workers=15) as executor:
                 for sport, e_ids in event_ids_by_sport.items():
                     p_markets = PROP_MARKETS.get(sport, "")
-                        
                     if p_markets:
                         for e_id in e_ids:
                             prop_futures.append(executor.submit(fetch_props_worker, sport, e_id, p_markets, api_key, session))
                 
                 for future in as_completed(prop_futures):
                     sport, data, remaining = future.result()
-                    if data:
-                        raw_results.append((sport, data))
+                    if data: raw_results.append((sport, data))
                     if remaining: req_remaining = remaining
 
             # PHASE 3: THE SNIPER ENGINE
             for sport, data in raw_results:
                 for event in data:
                     
-                    # 🛑 LIVE GAME KILLSWITCH
+                    # LIVE GAME KILLSWITCH
                     commence_time = event.get('commence_time')
                     if commence_time:
                         game_start = datetime.strptime(commence_time, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                        if game_start < datetime.now(timezone.utc):
-                            continue
+                        if game_start < datetime.now(timezone.utc): continue
 
                     home_team = event.get('home_team', 'Home')
                     away_team = event.get('away_team', 'Away')
@@ -222,15 +201,13 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                     true_probs_accum = {}
                     sharp_holds = {}
                     
-                    # 3A. Extract Sharp Baselines
+                    # 3A. Sharp Baselines
                     for book_key, book in bookies.items():
-                        if book_key not in SHARP_BOOKS_PROPS: 
-                            continue
-                            
+                        if book_key not in SHARP_BOOKS_PROPS: continue
                         for market in book.get('markets', []):
                             m_key = market['key']
-                            
                             groups = {}
+                            
                             for out in market['outcomes']:
                                 desc = out.get('description', 'Game')
                                 pt = out.get('point')
@@ -245,68 +222,68 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                         implied_b = 1.0 / american_to_decimal(outs[1]['price'])
                                     except: continue
                                         
-                                    market_hold_pct = (implied_a + implied_b - 1.0) * 100
                                     fair_a, fair_b = devig_power(implied_a, implied_b)
                                     
-                                    clean_name_a = get_clean_outcome_name(outs[0], home_team, away_team)
-                                    clean_name_b = get_clean_outcome_name(outs[1], home_team, away_team)
+                                    # Translate Names to Home/Away
+                                    std_name_a = standardize_selection(outs[0]['name'], home_team, away_team)
+                                    std_name_b = standardize_selection(outs[1]['name'], home_team, away_team)
                                     
-                                    b_key_a = (m_key, clean_name_a, outs[0].get('description', 'Game'), outs[0].get('point'))
-                                    b_key_b = (m_key, clean_name_b, outs[1].get('description', 'Game'), outs[1].get('point'))
+                                    b_key_a = (m_key, std_name_a, outs[0].get('description', 'Game'), outs[0].get('point'))
+                                    b_key_b = (m_key, std_name_b, outs[1].get('description', 'Game'), outs[1].get('point'))
                                     
                                     if b_key_a not in true_probs_accum: true_probs_accum[b_key_a] = []
                                     if b_key_b not in true_probs_accum: true_probs_accum[b_key_b] = []
                                         
                                     true_probs_accum[b_key_a].append(fair_a)
                                     true_probs_accum[b_key_b].append(fair_b)
-                                    sharp_holds[b_key_a] = market_hold_pct
-                                    sharp_holds[b_key_b] = market_hold_pct
+                                    sharp_holds[b_key_a] = (implied_a + implied_b - 1.0) * 100
+                                    sharp_holds[b_key_b] = (implied_a + implied_b - 1.0) * 100
                                     
                     if not true_probs_accum: continue
                     true_probs = {k: sum(v)/len(v) for k, v in true_probs_accum.items()}
                     
-                    # 3B. Hunt for God Tier Value
+                    # 3B. Find Value in Soft Books
                     for book_key, book in bookies.items():
-                        if md_filter and book_key not in MD_BOOKS: 
-                            continue
-                        if book_key in SHARP_BOOKS_PROPS: 
-                            continue
+                        if md_filter and book_key not in MD_BOOKS: continue
+                        if book_key in SHARP_BOOKS_PROPS: continue
                                 
                         for market in book.get('markets', []):
                             m_key = market['key']
-                                
                             for out in market['outcomes']:
-                                clean_name = get_clean_outcome_name(out, home_team, away_team)
-                                bet_key = (m_key, clean_name, out.get('description', 'Game'), out.get('point'))
+                                std_name = standardize_selection(out['name'], home_team, away_team)
+                                bet_key = (m_key, std_name, out.get('description', 'Game'), out.get('point'))
                                 
                                 if bet_key in true_probs:
                                     true_p = true_probs[bet_key]
                                     soft_odds = out['price']
                                     ev_pct = calculate_ev(true_p, soft_odds)
-                                    hold_pct = sharp_holds.get(bet_key, 100.0)
                                     
-                                    tier = get_tier(ev_pct, hold_pct)
+                                    tier = get_tier(ev_pct, sharp_holds.get(bet_key, 100.0))
                                     if tier:
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
                                         
-                                        market_display = m_key.replace('_', ' ').title()
-                                        selection_str = clean_name
+                                        # Format the selection name for the UI cleanly
+                                        display_sel = out['name']
+                                        if std_name == "Home": display_sel = home_team
+                                        elif std_name == "Away": display_sel = away_team
+                                            
+                                        selection_str = display_sel
                                         if out.get('description') and out.get('description') != 'Game':
-                                            selection_str = f"{out['description']} {selection_str}"
+                                            selection_str = f"{out['description']} - {selection_str}"
+                                            
                                         if out.get('point') is not None:
                                             pt = out['point']
-                                            pt_str = f"+{pt}" if pt > 0 and 'spread' in m_key else str(pt)
-                                            selection_str += f" ({pt_str})"
+                                            selection_str += f" ({'+' if pt > 0 and 'spread' in m_key else ''}{pt})"
                                             
                                         ev_opportunities.append({
                                             "Tier": tier,
                                             "Matchup": matchup,
-                                            "Market": market_display,
+                                            "Market": m_key.replace('_', ' ').title(),
                                             "Selection": selection_str,
                                             "Soft Book": book['title'].upper(),
                                             "Odds": f"{int(soft_odds):+d}" if soft_odds > 0 else str(int(soft_odds)),
                                             "Edge": ev_pct,
-                                            "Sharp Hold": hold_pct,
+                                            "Sharp Hold": sharp_holds.get(bet_key, 100.0),
                                             "Rec Stake": f"${stake:.2f}"
                                         })
 
@@ -316,15 +293,12 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
 
             if ev_opportunities:
                 df = pd.DataFrame(ev_opportunities).drop_duplicates()
-                
-                tier_order = {'🟢 OMEGA TIER': 0, '🟡 ELITE TIER': 1, '🔵 VALUE TIER': 2}
-                df['TierRank'] = df['Tier'].map(tier_order)
+                df['TierRank'] = df['Tier'].map({'🟢 OMEGA TIER': 0, '🟡 ELITE TIER': 1, '🔵 VALUE TIER': 2})
                 df = df.sort_values(by=["TierRank", "Edge"], ascending=[True, False]).drop(columns=['TierRank'])
-                
                 df['Edge'] = df['Edge'].apply(lambda x: f"{x:.2f}%")
                 df['Sharp Hold'] = df['Sharp Hold'].apply(lambda x: f"{x:.2f}%")
                 
                 st.success(f"Sniper locked on. Found {len(df)} heavily vetted pre-game plays.")
                 st.dataframe(style_dataframe(df), use_container_width=True)
             else:
-                st.error("No God Tier or Elite PRE-GAME plays currently available. The books are tight right now. Save your money and scan later.")
+                st.error("No God Tier or Elite PRE-GAME plays currently available. Save your money and scan later.")
