@@ -16,7 +16,6 @@ st.set_page_config(
 MD_BOOKS = ["draftkings", "fanduel", "espnbet", "betmgm", "caesars"]
 SHARP_BOOKS_PROPS = ["bovada", "betonlineag", "pinnacle"]
 
-# Focused STRICTLY on MLB, NBA, NFL, and UFC Props, Exotics, and Halves
 PROP_MARKETS = {
     "baseball_mlb": "batter_home_runs,batter_strikeouts,pitcher_strikeouts,h2h_1st_5_innings,spreads_1st_5_innings,totals_1st_5_innings",
     "basketball_nba": "player_points,player_rebounds,player_assists,player_threes,h2h_q1,h2h_h1,spreads_h1,totals_h1",
@@ -25,7 +24,7 @@ PROP_MARKETS = {
 }
 
 # ==============================================================================
-# 2. HELPER CALCULATIONS
+# 2. HELPER CALCULATIONS & TEAM NAME NORMALIZATION
 # ==============================================================================
 def american_to_decimal(american):
     if american > 0:
@@ -40,7 +39,6 @@ def decimal_to_american(dec):
         return int(round(-100 / (dec - 1.0)))
     return 0
 
-# The Power Devig method is mathematically optimal for props to remove the favorite-longshot bias
 def devig_power(implied_a, implied_b):
     total_implied = implied_a + implied_b
     if total_implied <= 1.0:
@@ -67,20 +65,26 @@ def calculate_kelly(fair_prob, target_odds_american, fraction, bankroll):
     f_star = (b * fair_prob - q) / b
     return max(0.0, round(f_star * fraction * bankroll, 2))
 
+# Normalizes 'Home'/'Away' outcomes to actual team names for consistent matching
+def get_clean_outcome_name(out, home_team, away_team):
+    name = out.get('name', '')
+    if name.lower() in ['home', 'h']:
+        return home_team
+    elif name.lower() in ['away', 'a', 'v']:
+        return away_team
+    return name
+
 # ==============================================================================
 # 3. TIER CLASSIFICATION & STYLING
 # ==============================================================================
 def get_tier(ev, hold):
-    # OMEGA: Insane value (EV >= 4.5%) combined with extreme sharp confidence (Hold <= 5.5%)
     if hold <= 5.5 and ev >= 4.5:
         return '🟢 OMEGA TIER'
-    # ELITE: Strong value (EV >= 3.0%) with highly confident sharps (Hold <= 6.5%)
     elif hold <= 6.5 and ev >= 3.0:
         return '🟡 ELITE TIER'
-    # VALUE: Minimum acceptable threshold for taking a prop/half
     elif hold <= 7.0 and ev >= 2.0:
         return '🔵 VALUE TIER'
-    return None # Trash plays return None and get filtered out
+    return None 
 
 def style_dataframe(df):
     def highlight_rows(row):
@@ -92,7 +96,6 @@ def style_dataframe(df):
             return ['background-color: rgba(0, 191, 255, 0.15)'] * len(row)
         return [''] * len(row)
     
-    # Safely apply styles and hide the index directly in the Styler
     return df.style.apply(highlight_rows, axis=1).hide(axis="index")
 
 # ==============================================================================
@@ -112,7 +115,6 @@ def fetch_events_worker(sport, api_key, session):
     return sport, [], None
 
 def fetch_props_worker(sport, event_id, prop_markets, api_key, session):
-    # Removed the trailing slash which can cause API connection issues
     url = f"https://api.the-odds-api.com/v4/sports/{sport}/events/{event_id}/odds"
     params = {'apiKey': api_key, 'regions': 'us', 'markets': prop_markets, 'oddsFormat': 'american'}
     try:
@@ -169,7 +171,6 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
             req_remaining = None
             event_ids_by_sport = {s: [] for s in sports_to_scan}
             
-            # Mount a custom adapter to allow true parallel processing via ThreadPoolExecutor
             session = requests.Session()
             adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
             session.mount('https://', adapter)
@@ -206,17 +207,16 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
             for sport, data in raw_results:
                 for event in data:
                     
-                    # ==========================================
-                    # 🛑 THE LIVE GAME KILLSWITCH 🛑
-                    # ==========================================
+                    # 🛑 LIVE GAME KILLSWITCH
                     commence_time = event.get('commence_time')
                     if commence_time:
                         game_start = datetime.strptime(commence_time, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
                         if game_start < datetime.now(timezone.utc):
                             continue
-                    # ==========================================
 
-                    matchup = f"{event.get('away_team')} @ {event.get('home_team')}"
+                    home_team = event.get('home_team', 'Home')
+                    away_team = event.get('away_team', 'Away')
+                    matchup = f"{away_team} @ {home_team}"
                     bookies = {b['key']: b for b in event.get('bookmakers', [])}
                     
                     true_probs_accum = {}
@@ -246,11 +246,13 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                     except: continue
                                         
                                     market_hold_pct = (implied_a + implied_b - 1.0) * 100
-                                    
                                     fair_a, fair_b = devig_power(implied_a, implied_b)
                                     
-                                    b_key_a = (m_key, outs[0]['name'], outs[0].get('description', 'Game'), outs[0].get('point'))
-                                    b_key_b = (m_key, outs[1]['name'], outs[1].get('description', 'Game'), outs[1].get('point'))
+                                    clean_name_a = get_clean_outcome_name(outs[0], home_team, away_team)
+                                    clean_name_b = get_clean_outcome_name(outs[1], home_team, away_team)
+                                    
+                                    b_key_a = (m_key, clean_name_a, outs[0].get('description', 'Game'), outs[0].get('point'))
+                                    b_key_b = (m_key, clean_name_b, outs[1].get('description', 'Game'), outs[1].get('point'))
                                     
                                     if b_key_a not in true_probs_accum: true_probs_accum[b_key_a] = []
                                     if b_key_b not in true_probs_accum: true_probs_accum[b_key_b] = []
@@ -274,7 +276,8 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                             m_key = market['key']
                                 
                             for out in market['outcomes']:
-                                bet_key = (m_key, out['name'], out.get('description', 'Game'), out.get('point'))
+                                clean_name = get_clean_outcome_name(out, home_team, away_team)
+                                bet_key = (m_key, clean_name, out.get('description', 'Game'), out.get('point'))
                                 
                                 if bet_key in true_probs:
                                     true_p = true_probs[bet_key]
@@ -287,7 +290,7 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                         stake = calculate_kelly(true_p, soft_odds, kelly_fraction, bankroll)
                                         
                                         market_display = m_key.replace('_', ' ').title()
-                                        selection_str = out['name']
+                                        selection_str = clean_name
                                         if out.get('description') and out.get('description') != 'Game':
                                             selection_str = f"{out['description']} {selection_str}"
                                         if out.get('point') is not None:
@@ -301,7 +304,6 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                                             "Market": market_display,
                                             "Selection": selection_str,
                                             "Soft Book": book['title'].upper(),
-                                            # Fixed string conversion of odds to prevent formatting crashes
                                             "Odds": f"{int(soft_odds):+d}" if soft_odds > 0 else str(int(soft_odds)),
                                             "Edge": ev_pct,
                                             "Sharp Hold": hold_pct,
@@ -323,8 +325,6 @@ if st.button("⚡ EXECUTE GOD MODE SCAN", type="primary", use_container_width=Tr
                 df['Sharp Hold'] = df['Sharp Hold'].apply(lambda x: f"{x:.2f}%")
                 
                 st.success(f"Sniper locked on. Found {len(df)} heavily vetted pre-game plays.")
-                
-                # Removed conflicting hide_index kwarg since we native-hid it in the Style function above
                 st.dataframe(style_dataframe(df), use_container_width=True)
             else:
                 st.error("No God Tier or Elite PRE-GAME plays currently available. The books are tight right now. Save your money and scan later.")
